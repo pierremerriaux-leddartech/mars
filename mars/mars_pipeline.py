@@ -86,8 +86,8 @@ class MarsPipeline(Pipeline):
         assert self.datamanager.train_dataset is not None, "Missing input dataset"
         self.config.model.max_num_obj = self.config.datamanager.dataparser.max_input_objects
         self.config.model.ray_add_input_rows = self.config.datamanager.dataparser.add_input_rows
-        self.train_obj_info = self.datamanager.train_dataset.metadata["obj_info"]
-        self.eval_obj_info = self.datamanager.eval_dataset.metadata["obj_info"]
+        # self.train_obj_info = self.datamanager.train_dataset.metadata["obj_info"]
+        # self.eval_obj_info = self.datamanager.eval_dataset.metadata["obj_info"]
 
         use_car_latents = "car_latents" in self.datamanager.train_dataset.metadata
         self._model = config.model.setup(

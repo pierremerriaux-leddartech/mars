@@ -40,6 +40,11 @@ from nerfstudio.plugins.registry_dataparser import DataParserSpecification
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.io import load_from_json
 
+from pandaset import DataSet
+from pandaset import geometry
+
+import transforms3d
+
 CONSOLE = Console(width=120)
 _sem2label = {"Misc": -1, "Car": 0, "Van": 0, "Truck": 2, "Tram": 3, "Pedestrian": 4}
 camera_ls = [2, 3]
@@ -810,6 +815,12 @@ def extract_object_information(args, visible_objects, objects_meta):
         obj_state = visible_objects[:, :, [7, 8, 9, 2, 3]]  # [x,y,z,track_id,class_id]
         obj_dir = visible_objects[:, :, 10][..., None]  # yaw_angle
         sh = obj_state.shape
+    elif args.dataset_type == "pandaset":
+        # TODO PIERRE
+        # obj_state = visible_objects[:, :, [7, 8, 9, 2, 3]]  # [x,y,z,track_id,class_id]
+        # obj_dir = visible_objects[:, :, 10][..., None]  # yaw_angle
+        # sh = obj_state.shape
+        pass
 
     # obj_state: [cam, n_obj, [x,y,z,track_id, class_id]]
 
@@ -861,14 +872,28 @@ def extract_object_information(args, visible_objects, objects_meta):
 
     return obj_properties, add_input_rows, obj_meta_ls, scene_objects, scene_classes
 
+def pose_to_Tr(pose):
+        T = np.array([pose['position']['x'],pose['position']['y'],pose['position']['z']])
+        R = transforms3d.quaternions.quat2mat(np.array([
+            pose['heading']['w'],
+            pose['heading']['x'],
+            pose['heading']['y'],
+            pose['heading']['z'],
+
+        ]))
+        Tr = np.eye(4)
+        Tr[:3,:3] = R
+        Tr[:3,3] = T
+        return Tr
+
 
 @dataclass
-class MarsKittiDataParserConfig(DataParserConfig):
+class MarsPandasetDataParserConfig(DataParserConfig):
     """nerual scene graph dataset parser config"""
 
-    _target: Type = field(default_factory=lambda: MarsKittiParser)
+    _target: Type = field(default_factory=lambda: MarsPandasetParser)
     """target class to instantiate"""
-    data: Path = Path("data/kitti/training/image_02/0006")
+    data: Path = Path("data/pandaset")
     """Directory specifying location of data."""
     scale_factor: float = 1
     """How much to scale the camera origins by."""
@@ -876,9 +901,9 @@ class MarsKittiDataParserConfig(DataParserConfig):
     """How much to scale the region of interest by."""
     alpha_color: str = "white"
     """alpha color of background"""
-    first_frame: int = 65
+    first_frame: int = 0
     """specifies the beginning of a sequence if not the complete scene is taken as Input"""
-    last_frame: int = 230
+    last_frame: int = 40
     """specifies the end of a sequence"""
     use_object_properties: bool = True
     """ use pose and properties of visible objects as an input """
@@ -889,15 +914,20 @@ class MarsKittiDataParserConfig(DataParserConfig):
     box_scale: float = 1.5
     """Maximum scale for bboxes to include shadows"""
     novel_view: str = "left"
-    use_obj: bool = True
+    use_obj: bool = False # TODO for pierre test
     render_only: bool = False
     bckg_only: bool = False
-    use_object_properties: bool = True
+    use_object_properties: bool = False # TODO for pierre test
     near_plane: float = 0.5
     """specifies the distance from the last pose to the near plane"""
     far_plane: float = 150.0
     """specifies the distance from the last pose to the far plane"""
-    dataset_type: str = "kitti"
+    dataset_type: str = "pandaset"
+
+    seq_name: str = '048'
+    """pandaset sequence name in data folder"""
+    cameras_name_list: List[str] = field(default_factory=lambda: ['front_camera'])
+    """pandaset camera names to process, possible values are: 'front_camera', 'front_left_camera', 'front_right_camera', 'left_camera', 'right_camera'"""
     obj_only: bool = False
     """Train object models on rays close to the objects only"""
     netchunk: int = 1024 * 64
@@ -924,12 +954,12 @@ class MarsKittiDataParserConfig(DataParserConfig):
 
 
 @dataclass
-class MarsKittiParser(DataParser):
+class MarsPandasetParser(DataParser):
     """nerual scene graph kitti Dataset"""
 
-    config: MarsKittiDataParserConfig
+    config: MarsPandasetDataParserConfig
 
-    def __init__(self, config: MarsKittiDataParserConfig):
+    def __init__(self, config: MarsPandasetDataParserConfig):
         super().__init__(config=config)
         self.data: Path = config.data
         self.scale_factor: float = config.scale_factor
@@ -946,6 +976,8 @@ class MarsKittiParser(DataParser):
         self.use_object_properties = config.use_object_properties
         self.bckg_only = config.bckg_only
         self.dataset_type = config.dataset_type
+        self.seq_name = config.seq_name
+        self.cameras_name_list = config.cameras_name_list
         self.time_stamp = None
         self.obj_only = config.obj_only
         self.use_inst_segm = False
@@ -960,156 +992,243 @@ class MarsKittiParser(DataParser):
         visible_objects_ls = []
         objects_meta_ls = []
         semantic_meta = []
-        kitti2vkitti = np.array(
-            [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
-        )
+        # kitti2vkitti = np.array(
+        #     [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+        # )
+
         if self.alpha_color is not None:
             alpha_color_tensor = get_color(self.alpha_color)
         else:
             alpha_color_tensor = None
 
         basedir = str(self.data)
-        scene_id = basedir[-4:]  # check
-        kitti_scene_no = int(scene_id)
-        tracking_path = basedir[:-13]  # check
-        calibration_path = os.path.join(os.path.join(tracking_path, "calib"), scene_id + ".txt")
-        oxts_path_tracking = os.path.join(os.path.join(tracking_path, "oxts"), scene_id + ".txt")
-        tracklet_path = os.path.join(os.path.join(tracking_path, "label_02"), scene_id + ".txt")
 
-        tracking_calibration = tracking_calib_from_txt(calibration_path)
-        focal_X = tracking_calibration["P2"][0, 0]
-        focal_Y = tracking_calibration["P2"][1, 1]
-        poses_imu_w_tracking, _, _ = get_poses_calibration(basedir, oxts_path_tracking)  # (n_frames, 4, 4) imu pose
+        dataset = DataSet(basedir)
+        seq = dataset[self.seq_name]
+        seq.load_camera()
+        seq.load_lidar()
+        seq.load_cuboids()
+        # we want to genere that
+        # image_filenames=image_filenames,
+        #     cameras=cameras,
+        image_filenames = []
+        fx = []
+        fy = []
+        cx = []
+        cy = []
+        camera_type = []
+        image_width = []
+        image_height = []
+        poses = []
+        depth_name = []
+        for camera_name in self.cameras_name_list:
+            camera = seq.camera[camera_name]
+            w, h = camera[0].size
+            
+            img_files = camera._data_structure[self.selected_frames[0]:self.selected_frames[1]]
+            image_filenames.extend(img_files)
+            for frame_idx in range(len(img_files)):
+                image_width.append(w)
+                image_height.append(h)
+                fx.append(camera.intrinsics.fx)
+                fy.append(camera.intrinsics.fy)
+                cx.append(camera.intrinsics.cx)
+                cy.append(camera.intrinsics.cy)
+                camera_type.append(CameraType.PERSPECTIVE)
+                pose = camera.poses[frame_idx]
+                Tr = pose_to_Tr(pose)
+                c2w = Tr.copy()
+                flip_mat = np.array([
+                    [1, 0, 0, 0],
+                    [0, -1, 0, 0],
+                    [0, 0, -1, 0],
+                    [0, 0, 0, 1]
+                ])
+                flip_mat2 = np.array([
+                    [0, -1, 0, 0],
+                    [1, 0, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 0, 0, 1]
+                ])
+                # just for debug purpose, uncomment this part if used to train with nerfstudio
+                c2w[0:3,2] *= -1 # flip the y and z axis
+                c2w[0:3,1] *= -1
+                c2w = c2w[[1,0,2,3],:]
+                c2w[2,:] *= -1 # flip whole world upside down
+                poses.append(flip_mat2 @ flip_mat @ c2w)
+        
+            if self.config.use_depth:
+                import glob
+                depth_camera_files = sorted(glob.glob(os.path.join(os.path.dirname(img_files[0]), 'depth', '*.npy')))
+                depth_name.extend(depth_camera_files[self.selected_frames[0]:self.selected_frames[1]])
 
-        tr_imu2velo = tracking_calibration["Tr_imu2velo"]
-        tr_velo2imu = invert_transformation(tr_imu2velo[:3, :3], tr_imu2velo[:3, 3])
-        poses_velo_w_tracking = np.matmul(poses_imu_w_tracking, tr_velo2imu)  # (n_frames, 4, 4) velodyne pose
+        poses = np.array(poses)   
+        fx = np.array(fx)  
+        fy = np.array(fy)  
+        cx = np.array(cx)  
+        cy = np.array(cy)  
 
-        if self.use_semantic:
-            semantics = pd.read_csv(
-                os.path.join(self.semantic_path, "colors", scene_id + ".txt"),
-                sep=" ",
-                index_col=False,
-            )
+        image_width = np.array(image_width)  
+        image_height = np.array(image_height)  
+        camera_type = np.array(camera_type)  
 
-        if self.use_semantic:
-            semantics = semantics.loc[~semantics["Category"].isin(self.config.semantic_mask_classes)]
-            semantic_meta = Semantics(
-                filenames=[],
-                classes=semantics["Category"].tolist(),
-                colors=torch.tensor(semantics.iloc[:, 1:].values),
-                mask_classes=self.config.semantic_mask_classes,
-            )
-        # Get camera Poses   camare id: 02, 03
-        for cam_i in range(2):
-            transformation = np.eye(4)
-            projection = tracking_calibration["P" + str(cam_i + 2)]  # rectified camera coordinate system -> image
-            K_inv = np.linalg.inv(projection[:3, :3])
-            R_t = projection[:3, 3]
-
-            t_crect2c = np.matmul(K_inv, R_t)
-            # t_crect2c = 1./projection[[0, 1, 2],[0, 1, 2]] * projection[:, 3]
-            transformation[:3, 3] = t_crect2c
-            tracking_calibration["Tr_camrect2cam0" + str(cam_i + 2)] = transformation
-
-        sequ_frames = self.selected_frames
-
-        cam_poses_tracking = get_camera_poses_tracking(
-            poses_velo_w_tracking, tracking_calibration, sequ_frames, kitti_scene_no
-        )
-        # cam_poses_tracking[..., :3, 3] *= self.scale_factor
-
-        # Orients and centers the poses
-        oriented = torch.from_numpy(np.array(cam_poses_tracking).astype(np.float32))  # (n_frames, 3, 4)
-        oriented, transform_matrix = camera_utils.auto_orient_and_center_poses(
-            oriented
-        )  # oriented (n_frames, 3, 4), transform_matrix (3, 4)
-        row = torch.tensor([0, 0, 0, 1], dtype=torch.float32)
-        zeros = torch.zeros(oriented.shape[0], 1, 4)
-        oriented = torch.cat([oriented, zeros], dim=1)
-        oriented[:, -1] = row  # (n_frames, 4, 4)
-        transform_matrix = torch.cat([transform_matrix, row[None, :]], dim=0)  # (4, 4)
-        cam_poses_tracking = oriented.numpy()
-        transform_matrix = transform_matrix.numpy()
-        image_filenames, depth_name, semantic_name = get_scene_images_tracking(
-            tracking_path, scene_id, sequ_frames, self.config.use_depth, self.use_semantic, self.semantic_path
-        )
-
-        # Get Object poses
-        visible_objects_, objects_meta_ = get_obj_pose_tracking(
-            tracklet_path, poses_imu_w_tracking, tracking_calibration, sequ_frames, transform_matrix
-        )
-
-        # # Align Axis with vkitti axis
-        poses = np.matmul(kitti2vkitti, cam_poses_tracking).astype(np.float32)
-        visible_objects_[:, :, [9]] *= -1
-        visible_objects_[:, :, [7, 8, 9]] = visible_objects_[:, :, [7, 9, 8]]
-
-        # oriented = torch.from_numpy(np.array(poses).astype(np.float32))
-        # oriented, transform_matrix = camera_utils.auto_orient_and_center_poses(
-        #     oriented, method="none", center_poses=True
+        # cameras = Cameras(
+        #     camera_to_worlds=torch.from_numpy(poses[:, :3, :4]),
+        #     fx=focal_X,
+        #     fy=focal_Y,
+        #     cx=cx,
+        #     cy=cy,
+        #     camera_type=CameraType.PERSPECTIVE,
+        #     height=image_height,
+        #     width=image_width,
         # )
-        # poses[..., :3, :] = oriented.numpy()
-        # visible_objects_[:, :, 7:10] = (
-        #     transform_matrix
-        #     @ np.concatenate(
-        #         [
-        #             visible_objects_[:, :, 7:10, None],
-        #             np.ones([visible_objects_.shape[0], visible_objects_.shape[1], 1, 1]),
-        #         ],
-        #         axis=-2,
+
+
+
+        # scene_id = basedir[-4:]  # check
+        # kitti_scene_no = int(scene_id)
+        # tracking_path = basedir[:-13]  # check
+        # calibration_path = os.path.join(os.path.join(tracking_path, "calib"), scene_id + ".txt")
+        # oxts_path_tracking = os.path.join(os.path.join(tracking_path, "oxts"), scene_id + ".txt")
+        # tracklet_path = os.path.join(os.path.join(tracking_path, "label_02"), scene_id + ".txt")
+
+        # tracking_calibration = tracking_calib_from_txt(calibration_path)
+        # focal_X = tracking_calibration["P2"][0, 0]
+        # focal_Y = tracking_calibration["P2"][1, 1]
+        # poses_imu_w_tracking, _, _ = get_poses_calibration(basedir, oxts_path_tracking)  # (n_frames, 4, 4) imu pose
+
+        # tr_imu2velo = tracking_calibration["Tr_imu2velo"]
+        # tr_velo2imu = invert_transformation(tr_imu2velo[:3, :3], tr_imu2velo[:3, 3])
+        # poses_velo_w_tracking = np.matmul(poses_imu_w_tracking, tr_velo2imu)  # (n_frames, 4, 4) velodyne pose
+
+        if self.use_semantic:
+            CONSOLE.print("[yello]Error: semantic not supported for know in pandaset dataloader")
+            exit()
+            # semantics = pd.read_csv(
+            #     os.path.join(self.semantic_path, "colors", scene_id + ".txt"),
+            #     sep=" ",
+            #     index_col=False,
+            # )
+
+        # if self.use_semantic:
+        #     semantics = semantics.loc[~semantics["Category"].isin(self.config.semantic_mask_classes)]
+        #     semantic_meta = Semantics(
+        #         filenames=[],
+        #         classes=semantics["Category"].tolist(),
+        #         colors=torch.tensor(semantics.iloc[:, 1:].values),
+        #         mask_classes=self.config.semantic_mask_classes,
         #     )
-        # )[:, :, :3, 0]
+        # Get camera Poses   camare id: 02, 03
+        # for cam_i in range(2):
+        #     transformation = np.eye(4)
+        #     projection = tracking_calibration["P" + str(cam_i + 2)]  # rectified camera coordinate system -> image
+        #     K_inv = np.linalg.inv(projection[:3, :3])
+        #     R_t = projection[:3, 3]
 
-        visible_objects_ls.append(visible_objects_)
-        objects_meta_ls.append(objects_meta_)
+        #     t_crect2c = np.matmul(K_inv, R_t)
+        #     # t_crect2c = 1./projection[[0, 1, 2],[0, 1, 2]] * projection[:, 3]
+        #     transformation[:3, 3] = t_crect2c
+        #     tracking_calibration["Tr_camrect2cam0" + str(cam_i + 2)] = transformation
 
-        objects_meta = objects_meta_ls[0]
-        N_obj = np.array([len(seq_objs[0]) for seq_objs in visible_objects_ls]).max()
-        for seq_i, visible_objects in enumerate(visible_objects_ls):
-            diff = N_obj - len(visible_objects[0])
-            if diff > 0:
-                fill = np.ones([np.shape(visible_objects)[0], diff, np.shape(visible_objects)[2]]) * -1
-                visible_objects = np.concatenate([visible_objects, fill], axis=1)
-                visible_objects_ls[seq_i] = visible_objects
+        # sequ_frames = self.selected_frames
 
-            if seq_i != 0:
-                objects_meta.update(objects_meta_ls[seq_i])
+        # cam_poses_tracking = get_camera_poses_tracking(
+        #     poses_velo_w_tracking, tracking_calibration, sequ_frames, kitti_scene_no
+        # )
+        # # cam_poses_tracking[..., :3, 3] *= self.scale_factor
 
-        visible_objects = np.concatenate(visible_objects_ls)
+        # # Orients and centers the poses
+        # oriented = torch.from_numpy(np.array(cam_poses_tracking).astype(np.float32))  # (n_frames, 3, 4)
+        # oriented, transform_matrix = camera_utils.auto_orient_and_center_poses(
+        #     oriented
+        # )  # oriented (n_frames, 3, 4), transform_matrix (3, 4)
+        # row = torch.tensor([0, 0, 0, 1], dtype=torch.float32)
+        # zeros = torch.zeros(oriented.shape[0], 1, 4)
+        # oriented = torch.cat([oriented, zeros], dim=1)
+        # oriented[:, -1] = row  # (n_frames, 4, 4)
+        # transform_matrix = torch.cat([transform_matrix, row[None, :]], dim=0)  # (4, 4)
+        # cam_poses_tracking = oriented.numpy()
+        # transform_matrix = transform_matrix.numpy()
+        # image_filenames, depth_name, semantic_name = get_scene_images_tracking(
+        #     tracking_path, scene_id, sequ_frames, self.config.use_depth, self.use_semantic, self.semantic_path
+        # )
 
-        if visible_objects is not None:
-            self.config.max_input_objects = visible_objects.shape[1]
-        else:
-            self.config.max_input_objects = 0
+        # # Get Object poses
+        # visible_objects_, objects_meta_ = get_obj_pose_tracking(
+        #     tracklet_path, poses_imu_w_tracking, tracking_calibration, sequ_frames, transform_matrix
+        # )
 
-        # count = np.array(range(len(visible_objects)))
-        # i_split = [np.sort(count[:]), count[int(0.8 * len(count)) :], count[int(0.8 * len(count)) :]]
-        # i_train, i_val, i_test = i_split
+        # # # Align Axis with vkitti axis
+        # #poses = np.matmul(kitti2vkitti, cam_poses_tracking).astype(np.float32)
+        # visible_objects_[:, :, [9]] *= -1
+        # visible_objects_[:, :, [7, 8, 9]] = visible_objects_[:, :, [7, 9, 8]]
 
-        counts = np.arange(len(visible_objects)).reshape(2, -1)
-        i_test = np.array([(idx + 1) % 4 == 0 for idx in counts[0]])
-        i_test = np.concatenate((i_test, i_test))
+        # # oriented = torch.from_numpy(np.array(poses).astype(np.float32))
+        # # oriented, transform_matrix = camera_utils.auto_orient_and_center_poses(
+        # #     oriented, method="none", center_poses=True
+        # # )
+        # # poses[..., :3, :] = oriented.numpy()
+        # # visible_objects_[:, :, 7:10] = (
+        # #     transform_matrix
+        # #     @ np.concatenate(
+        # #         [
+        # #             visible_objects_[:, :, 7:10, None],
+        # #             np.ones([visible_objects_.shape[0], visible_objects_.shape[1], 1, 1]),
+        # #         ],
+        # #         axis=-2,
+        # #     )
+        # # )[:, :, :3, 0]
+
+        # visible_objects_ls.append(visible_objects_)
+        # objects_meta_ls.append(objects_meta_)
+
+        # objects_meta = objects_meta_ls[0]
+        # N_obj = np.array([len(seq_objs[0]) for seq_objs in visible_objects_ls]).max()
+        # for seq_i, visible_objects in enumerate(visible_objects_ls):
+        #     diff = N_obj - len(visible_objects[0])
+        #     if diff > 0:
+        #         fill = np.ones([np.shape(visible_objects)[0], diff, np.shape(visible_objects)[2]]) * -1
+        #         visible_objects = np.concatenate([visible_objects, fill], axis=1)
+        #         visible_objects_ls[seq_i] = visible_objects
+
+        #     if seq_i != 0:
+        #         objects_meta.update(objects_meta_ls[seq_i])
+
+        # visible_objects = np.concatenate(visible_objects_ls)
+
+        # if visible_objects is not None:
+        #     self.config.max_input_objects = visible_objects.shape[1]
+        # else:
+        #     self.config.max_input_objects = 0
+
+        # # count = np.array(range(len(visible_objects)))
+        # # i_split = [np.sort(count[:]), count[int(0.8 * len(count)) :], count[int(0.8 * len(count)) :]]
+        # # i_train, i_val, i_test = i_split
+
+        visible_objects = None
+        counts = np.arange(len(image_filenames))
+        i_test = np.array([(idx + 1) % 4 == 0 for idx in counts])
+        
         if self.config.split_setting == "reconstruction":
-            i_train = np.ones(len(visible_objects), dtype=bool)
+            i_train = np.ones(len(image_filenames), dtype=bool)
         elif self.config.split_setting == "nvs-75":
             i_train = ~i_test
         elif self.config.split_setting == "nvs-50":
-            desired_length = np.shape(counts)[1]
+            desired_length = np.shape(counts)[0]
             pattern = np.array([True, True, False, False])
             repetitions = (desired_length + len(pattern) - 1) // len(
                 pattern
             )  # Calculate number of necessary repetitions
             repeated_pattern = np.tile(pattern, repetitions)
             i_train = repeated_pattern[:desired_length]  # Slice to the desired length
-            i_train = np.concatenate((i_train, i_train))
+            
         elif self.config.split_setting == "nvs-25":
-            i_train = np.array([idx % 4 == 0 for idx in counts[0]])
-            i_train = np.concatenate((i_train, i_train))
+            i_train = np.array([idx % 4 == 0 for idx in counts])
+            
         else:
             raise ValueError("No such split method")
 
-        counts = counts.reshape(-1)
+        
         i_train = counts[i_train]
         i_test = counts[i_test]
 
@@ -1181,9 +1300,9 @@ class MarsKittiParser(DataParser):
         if self.render_only:
             visible_objects = render_objects
 
-        test_load_image = imageio.imread(image_filenames[0])
-        image_height, image_width = test_load_image.shape[:2]
-        cx, cy = image_width / 2.0, image_height / 2.0
+        # test_load_image = imageio.imread(image_filenames[0])
+        # image_height, image_width = test_load_image.shape[:2]
+        # cx, cy = image_width / 2.0, image_height / 2.0
 
         # Extract objects positions and labels
         if self.use_object_properties or self.bckg_only:
@@ -1194,12 +1313,14 @@ class MarsKittiParser(DataParser):
             n_input_frames = obj_nodes.shape[0]
             obj_nodes[..., :3] *= self.scale_factor
             obj_nodes = np.reshape(obj_nodes, [n_input_frames, self.max_input_objects * add_input_rows, 3])
-        obj_meta_tensor = torch.from_numpy(np.array(obj_meta_ls, dtype="float32"))  # TODO
 
-        obj_meta_tensor[..., 1:4] *= self.scale_factor
-        poses[..., :3, 3] *= self.scale_factor
+        # obj_meta_ls = []
+        # obj_meta_tensor = torch.from_numpy(np.array(obj_meta_ls, dtype="float32"))  # TODO
 
-        self.config.add_input_rows = add_input_rows
+        # obj_meta_tensor[..., 1:4] *= self.scale_factor
+        # poses[..., :3, 3] *= self.scale_factor
+
+        # self.config.add_input_rows = add_input_rows
         if split == "train":
             indices = i_train
         elif split == "val":
@@ -1224,41 +1345,59 @@ class MarsKittiParser(DataParser):
         # rays_rgb_env = rays_rgb
         input_size = 0
 
-        obj_nodes_tensor = torch.from_numpy(obj_nodes)
-        # if self.config.fast_loading:
-        #     obj_nodes_tensor = obj_nodes_tensor.cuda()
-        obj_nodes_tensor = obj_nodes_tensor[:, :, None, ...].repeat_interleave(image_width, dim=2)
-        obj_nodes_tensor = obj_nodes_tensor[:, :, None, ...].repeat_interleave(image_height, dim=2)
+        # obj_nodes_tensor = torch.from_numpy(obj_nodes)
+        # # if self.config.fast_loading:
+        # #     obj_nodes_tensor = obj_nodes_tensor.cuda()
+        # obj_nodes_tensor = obj_nodes_tensor[:, :, None, ...].repeat_interleave(image_width, dim=2)
+        # obj_nodes_tensor = obj_nodes_tensor[:, :, None, ...].repeat_interleave(image_height, dim=2)
 
-        obj_size = self.max_input_objects * add_input_rows
-        input_size += obj_size
-        # [N, ro+rd+rgb+obj_nodes, H, W, 3]
-        # rays_rgb_env = np.concatenate([rays_rgb_env, obj_nodes], 1)
+        # obj_size = self.max_input_objects * add_input_rows
+        # input_size += obj_size
+        # # [N, ro+rd+rgb+obj_nodes, H, W, 3]
+        # # rays_rgb_env = np.concatenate([rays_rgb_env, obj_nodes], 1)
 
-        # [N, H, W, ro+rd+rgb+obj_nodes*max_obj, 3]
-        # with obj_nodes [(x+y+z)*max_obj + (obj_id+is_training+0)*max_obj]
-        obj_nodes_tensor = obj_nodes_tensor.permute([0, 2, 3, 1, 4]).cpu()
-        # obj_nodes = np.stack([obj_nodes[i] for i in i_train], axis=0)  # train images only
-        obj_info = torch.cat([obj_nodes_tensor[i : i + 1] for i in indices], dim=0)
+        # # [N, H, W, ro+rd+rgb+obj_nodes*max_obj, 3]
+        # # with obj_nodes [(x+y+z)*max_obj + (obj_id+is_training+0)*max_obj]
+        # obj_nodes_tensor = obj_nodes_tensor.permute([0, 2, 3, 1, 4]).cpu()
+        # # obj_nodes = np.stack([obj_nodes[i] for i in i_train], axis=0)  # train images only
+        # obj_info = torch.cat([obj_nodes_tensor[i : i + 1] for i in indices], dim=0)
 
-        # """
-        # obj_info: n_images * image height * image width * (rays_o, rays_d, rgb, add_input_rows * n_max_obj) * 3
-        # add_input_rows = 2 for kitti:
-        #     the object info is represented as a 6-dim vector (~2*3, add_input_rows=2):
-        #     0~2. x, y, z position of the object
-        #     3. yaw angle of the object
-        #     4. object id: not track id. track_id = obj_meta[object_id][0]
-        #     5. 0 (no use, empty digit)
-        # """
-        # obj_info = torch.from_numpy(
-        #     np.reshape(rays_rgb, [image_n, image_height, image_width, 3 + input_size, 3])[:, :, :, 3:, :]
-        # )
+        # # """
+        # # obj_info: n_images * image height * image width * (rays_o, rays_d, rgb, add_input_rows * n_max_obj) * 3
+        # # add_input_rows = 2 for kitti:
+        # #     the object info is represented as a 6-dim vector (~2*3, add_input_rows=2):
+        # #     0~2. x, y, z position of the object
+        # #     3. yaw angle of the object
+        # #     4. object id: not track id. track_id = obj_meta[object_id][0]
+        # #     5. 0 (no use, empty digit)
+        # # """
+        # # obj_info = torch.from_numpy(
+        # #     np.reshape(rays_rgb, [image_n, image_height, image_width, 3 + input_size, 3])[:, :, :, 3:, :]
+        # # )
 
         image_filenames = [image_filenames[i] for i in indices]
-        depth_filenames = [depth_name[i] for i in indices] if self.config.use_depth else None
+        # depth_name = [] # TODO pierre
+        if self.config.use_depth:
+            depth_filenames = [depth_name[i] for i in indices] if self.config.use_depth else None
+        else:
+            depth_filenames = []
         if self.use_semantic:
             semantic_meta.filenames = [semantic_name[i] for i in indices]
         poses = poses[indices]
+        cx = cx[indices]
+        cy = cy[indices]
+        fx = fx[indices]
+        fy = fy[indices]
+        image_width = image_width[indices]
+        image_height = image_height[indices]
+        camera_type = camera_type[indices]
+
+        camera_type = list(camera_type)
+        
+
+       
+        
+
 
         if self.config.use_car_latents:
             if not self.config.car_object_latents_path.exists():
@@ -1290,13 +1429,13 @@ class MarsKittiParser(DataParser):
 
         cameras = Cameras(
             camera_to_worlds=torch.from_numpy(poses[:, :3, :4]),
-            fx=focal_X,
-            fy=focal_Y,
-            cx=cx,
-            cy=cy,
-            camera_type=CameraType.PERSPECTIVE,
-            height=image_height,
-            width=image_width,
+            fx=torch.from_numpy(fx),
+            fy=torch.from_numpy(fy),
+            cx=torch.from_numpy(cx),
+            cy=torch.from_numpy(cy),
+            camera_type=camera_type,
+            height=torch.from_numpy(image_height),
+            width=torch.from_numpy(image_width),
         )
 
         dataparser_outputs = DataparserOutputs(
@@ -1307,13 +1446,13 @@ class MarsKittiParser(DataParser):
             mask_filenames=None,
             dataparser_scale=self.scale_factor,
             metadata={
-                "depth_filenames": depth_filenames,
-                "obj_metadata": obj_meta_tensor if len(obj_meta_tensor) > 0 else None,
-                "obj_class": scene_classes if len(scene_classes) > 0 else None,
-                "scene_obj": scene_objects if len(scene_objects) > 0 else None,
-                "obj_info": obj_info if len(obj_info) > 0 else None,
+                 "depth_filenames": depth_filenames,
+            #     "obj_metadata": obj_meta_tensor if len(obj_meta_tensor) > 0 else None,
+            #     "obj_class": scene_classes if len(scene_classes) > 0 else None,
+            #     "scene_obj": scene_objects if len(scene_objects) > 0 else None,
+            #     "obj_info": obj_info if len(obj_info) > 0 else None,
                 "scale_factor": self.scale_factor,
-                "semantics": semantic_meta,
+            #     "semantics": semantic_meta,
             },
         )
 
@@ -1329,4 +1468,4 @@ class MarsKittiParser(DataParser):
         return dataparser_outputs
 
 
-KittiParserSpec = DataParserSpecification(config=MarsKittiDataParserConfig())
+PandasetParserSpec = DataParserSpecification(config=MarsPandasetDataParserConfig())

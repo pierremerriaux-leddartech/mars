@@ -63,12 +63,12 @@
       "name": "render",
       "type": "python",
       "request": "launch",
-      "program": "/data22/DISCOVER_summer2023/yexy2304/Mars-Studio/scripts/cicai_render.py",
+      "program": "scripts/cicai_render.py",
       "console": "integratedTerminal",
       "justMyCode": true,
       "args": [
         "--load-config",
-        "/data22/DISCOVER_summer2023/yexy2304/Mars-Studio/outputs/mars-vkitti-recon-02seq05to220/mars-vkitti-car-depth-recon/2023-05-30_230718/config.yml"
+        "/home/pierre.merriaux/data/mars-nerf/outputs/kitti-nvs-25/mars-kitti-car-depth-nvs/2023-06-29_152838/config_mars.yml"
       ]
     },
     {
@@ -83,6 +83,48 @@
         "Mars KITTI-0006",
         "--data",
         "/DATA_EDS/wuzr/data/kitti-MOT/training/image_02/0006",
+      ]
+    },
+    {
+      "name": "KITTI_Recon_Mars_Car_Depth_pierre",
+      "type": "python",
+      "request": "launch",
+      "program": "nerfstudio/nerfstudio/scripts/train.py",
+      "console": "integratedTerminal",
+      "args": [
+        "mars-kitti-car-depth-recon",
+        "--experiment_name",
+        "Mars KITTI-0006-pierre",
+        "--data",
+        "/home/pierre.merriaux/data/kitti-MOT/training/image_02/0006",
+        "--viewer.websocket-port=7008",
+        "--pipeline.datamanager.dataparser.car-object-latents-path",
+        "/home/pierre.merriaux/data/mars-nerf/latents/latent_codes_car_van_truck.pt",
+        "--pipeline.datamanager.dataparser.car-nerf-state-dict-path",
+        "/home/pierre.merriaux/data/mars-nerf/latents/KITTI-MOT/car-nerf-state-dict/epoch_670.ckpt",
+        "--vis",
+        "viewer"
+      ]
+    },
+    {
+      "name": "PANDASET_Recon_Mars_Car_Depth_pierre",
+      "type": "python",
+      "request": "launch",
+      "program": "nerfstudio/nerfstudio/scripts/train.py",
+      "console": "integratedTerminal",
+      "args": [
+        "mars-pandaset-car-depth-recon",
+        "--experiment_name",
+        "Mars_pandaset-048-pierre",
+        "--data",
+        "/home/pierre.merriaux/data/pandaset",
+        "--viewer.websocket-port=7008",
+        "--pipeline.datamanager.dataparser.car-object-latents-path",
+        "/home/pierre.merriaux/data/mars-nerf/latents/latent_codes_car_van_truck.pt",
+        "--pipeline.datamanager.dataparser.car-nerf-state-dict-path",
+        "/home/pierre.merriaux/data/mars-nerf/latents/KITTI-MOT/car-nerf-state-dict/epoch_670.ckpt",
+        "--vis",
+        "viewer"
       ]
     },
     {
