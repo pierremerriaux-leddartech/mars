@@ -47,34 +47,14 @@ import pandaset.annotations
 import pandas as pd
 
 import transforms3d
+from typing import Callable
 
 CONSOLE = Console(width=120)
-_sem2label = {"Misc": -1, "Car": 0, "Van": 0, "Truck": 2, "Tram": 3, "Pedestrian": 4}
-camera_ls = [2, 3]
 
+
+
+# I didn't put pedestrian, many other classes are available: https://github.com/scaleapi/pandaset-devkit/blob/master/docs/annotation_instructions_cuboids.pdf
 _sem2label_pandaset = {"Car": 0, "Pickup Truck": 0, "Medium-sized Truck": 2, "Semi-truck": 2, "Tram / Subway": 3, "Train": 3, "Trolley": 3}
-
-
-def kitti_string_to_float(str):
-    return float(str.split("e")[0]) * 10 ** int(str.split("e")[1])
-
-
-def get_rotation(roll, pitch, heading):
-    s_heading = np.sin(heading)
-    c_heading = np.cos(heading)
-    rot_z = np.array([[c_heading, -s_heading, 0], [s_heading, c_heading, 0], [0, 0, 1]])
-
-    s_pitch = np.sin(pitch)
-    c_pitch = np.cos(pitch)
-    rot_y = np.array([[c_pitch, 0, s_pitch], [0, 1, 0], [-s_pitch, 0, c_pitch]])
-
-    s_roll = np.sin(roll)
-    c_roll = np.cos(roll)
-    rot_x = np.array([[1, 0, 0], [0, c_roll, -s_roll], [0, s_roll, c_roll]])
-
-    rot = np.matmul(rot_z, np.matmul(rot_y, rot_x))
-
-    return rot
 
 
 def invert_transformation(rot, t):
@@ -82,322 +62,6 @@ def invert_transformation(rot, t):
     inv_translation = np.concatenate([rot.T, t[:, None]], axis=1)
     return np.concatenate([inv_translation, np.array([[0.0, 0.0, 0.0, 1.0]])])
 
-
-def calib_from_txt(calibration_path):
-    """
-    Read the calibration files and extract the required transformation matrices and focal length.
-
-    Args:
-        calibration_path (str): The path to the directory containing the calibration files.
-
-    Returns:
-        tuple: A tuple containing the following elements:
-            traimu2v (np.array): 4x4 transformation matrix from IMU to Velodyne coordinates.
-            v2c (np.array): 4x4 transformation matrix from Velodyne to left camera coordinates.
-            c2leftRGB (np.array): 4x4 transformation matrix from left camera to rectified left camera coordinates.
-            c2rightRGB (np.array): 4x4 transformation matrix from right camera to rectified right camera coordinates.
-            focal (float): Focal length of the left camera.
-    """
-    c2c = []
-
-    # Read and parse the camera-to-camera calibration file
-    f = open(os.path.join(calibration_path, "calib_cam_to_cam.txt"), "r")
-    cam_to_cam_str = f.read()
-    [left_cam, right_cam] = cam_to_cam_str.split("S_02: ")[1].split("S_03: ")
-    cam_to_cam_ls = [left_cam, right_cam]
-
-    # Extract the transformation matrices for left and right cameras
-    for i, cam_str in enumerate(cam_to_cam_ls):
-        r_str, t_str = cam_str.split("R_0" + str(i + 2) + ": ")[1].split("\nT_0" + str(i + 2) + ": ")
-        t_str = t_str.split("\n")[0]
-        R = np.array([kitti_string_to_float(r) for r in r_str.split(" ")])
-        R = np.reshape(R, [3, 3])
-        t = np.array([kitti_string_to_float(t) for t in t_str.split(" ")])
-        Tr = np.concatenate([np.concatenate([R, t[:, None]], axis=1), np.array([0.0, 0.0, 0.0, 1.0])[None, :]])
-
-        t_str_rect, s_rect_part = cam_str.split("\nT_0" + str(i + 2) + ": ")[1].split("\nS_rect_0" + str(i + 2) + ": ")
-        s_rect_str, r_rect_part = s_rect_part.split("\nR_rect_0" + str(i + 2) + ": ")
-        r_rect_str = r_rect_part.split("\nP_rect_0" + str(i + 2) + ": ")[0]
-        R_rect = np.array([kitti_string_to_float(r) for r in r_rect_str.split(" ")])
-        R_rect = np.reshape(R_rect, [3, 3])
-        t_rect = np.array([kitti_string_to_float(t) for t in t_str_rect.split(" ")])
-        Tr_rect = np.concatenate(
-            [np.concatenate([R_rect, t_rect[:, None]], axis=1), np.array([0.0, 0.0, 0.0, 1.0])[None, :]]
-        )
-
-        c2c.append(Tr_rect)
-
-    c2leftRGB = c2c[0]
-    c2rightRGB = c2c[1]
-
-    # Read and parse the Velodyne-to-camera calibration file
-    f = open(os.path.join(calibration_path, "calib_velo_to_cam.txt"), "r")
-    velo_to_cam_str = f.read()
-    r_str, t_str = velo_to_cam_str.split("R: ")[1].split("\nT: ")
-    t_str = t_str.split("\n")[0]
-    R = np.array([kitti_string_to_float(r) for r in r_str.split(" ")])
-    R = np.reshape(R, [3, 3])
-    t = np.array([kitti_string_to_float(r) for r in t_str.split(" ")])
-    v2c = np.concatenate([np.concatenate([R, t[:, None]], axis=1), np.array([0.0, 0.0, 0.0, 1.0])[None, :]])
-
-    # Read and parse the IMU-to-Velodyne calibration file
-    f = open(os.path.join(calibration_path, "calib_imu_to_velo.txt"), "r")
-    imu_to_velo_str = f.read()
-    r_str, t_str = imu_to_velo_str.split("R: ")[1].split("\nT: ")
-    R = np.array([kitti_string_to_float(r) for r in r_str.split(" ")])
-    R = np.reshape(R, [3, 3])
-    t = np.array([kitti_string_to_float(r) for r in t_str.split(" ")])
-    imu2v = np.concatenate([np.concatenate([R, t[:, None]], axis=1), np.array([0.0, 0.0, 0.0, 1.0])[None, :]])
-
-    # Extract the focal length of the left camera
-    focal = kitti_string_to_float(left_cam.split("P_rect_02: ")[1].split()[0])
-
-    return imu2v, v2c, c2leftRGB, c2rightRGB, focal
-
-
-def tracking_calib_from_txt(calibration_path):
-    """
-    Extract tracking calibration information from a KITTI tracking calibration file.
-
-    This function reads a KITTI tracking calibration file and extracts the relevant
-    calibration information, including projection matrices and transformation matrices
-    for camera, LiDAR, and IMU coordinate systems.
-
-    Args:
-        calibration_path (str): Path to the KITTI tracking calibration file.
-
-    Returns:
-        dict: A dictionary containing the following calibration information:
-            P0, P1, P2, P3 (np.array): 3x4 projection matrices for the cameras.
-            Tr_cam2camrect (np.array): 4x4 transformation matrix from camera to rectified camera coordinates.
-            Tr_velo2cam (np.array): 4x4 transformation matrix from LiDAR to camera coordinates.
-            Tr_imu2velo (np.array): 4x4 transformation matrix from IMU to LiDAR coordinates.
-    """
-    # Read the calibration file
-    f = open(calibration_path)
-    calib_str = f.read().splitlines()
-
-    # Process the calibration data
-    calibs = []
-    for calibration in calib_str:
-        calibs.append(np.array([kitti_string_to_float(val) for val in calibration.split()[1:]]))
-
-    # Extract the projection matrices
-    P0 = np.reshape(calibs[0], [3, 4])
-    P1 = np.reshape(calibs[1], [3, 4])
-    P2 = np.reshape(calibs[2], [3, 4])
-    P3 = np.reshape(calibs[3], [3, 4])
-
-    # Extract the transformation matrix for camera to rectified camera coordinates
-    Tr_cam2camrect = np.eye(4)
-    R_rect = np.reshape(calibs[4], [3, 3])
-    Tr_cam2camrect[:3, :3] = R_rect
-
-    # Extract the transformation matrices for LiDAR to camera and IMU to LiDAR coordinates
-    Tr_velo2cam = np.concatenate([np.reshape(calibs[5], [3, 4]), np.array([[0.0, 0.0, 0.0, 1.0]])], axis=0)
-    Tr_imu2velo = np.concatenate([np.reshape(calibs[6], [3, 4]), np.array([[0.0, 0.0, 0.0, 1.0]])], axis=0)
-
-    return {
-        "P0": P0,
-        "P1": P1,
-        "P2": P2,
-        "P3": P3,
-        "Tr_cam2camrect": Tr_cam2camrect,
-        "Tr_velo2cam": Tr_velo2cam,
-        "Tr_imu2velo": Tr_imu2velo,
-    }
-
-
-def get_poses_calibration(basedir, oxts_path_tracking=None, selected_frames=None):
-    """
-    Extract poses and calibration information from the KITTI dataset.
-
-    This function processes the OXTS data (GPS/IMU) and extracts the
-    pose information (translation and rotation) for each frame. It also
-    retrieves the calibration information (transformation matrices and focal length)
-    required for further processing.
-
-    Args:
-        basedir (str): The base directory containing the KITTI dataset.
-        oxts_path_tracking (str, optional): Path to the OXTS data file for tracking sequences.
-            If not provided, the function will look for OXTS data in the basedir.
-        selected_frames (list, optional): A list of frame indices to process.
-            If not provided, all frames in the dataset will be processed.
-
-    Returns:
-        tuple: A tuple containing the following elements:
-            poses (np.array): An array of 4x4 pose matrices representing the vehicle's
-                position and orientation for each frame (IMU pose).
-            calibrations (dict): A dictionary containing the transformation matrices
-                and focal length obtained from the calibration files.
-            focal (float): The focal length of the left camera.
-    """
-
-    def oxts_to_pose(oxts):
-        """
-        OXTS (Oxford Technical Solutions) data typically refers to the data generated by an Inertial and GPS Navigation System (INS/GPS) that is used to provide accurate position, orientation, and velocity information for a moving platform, such as a vehicle. In the context of the KITTI dataset, OXTS data is used to provide the ground truth for the vehicle's trajectory and 6 degrees of freedom (6-DoF) motion, which is essential for evaluating and benchmarking various computer vision and robotics algorithms, such as visual odometry, SLAM, and object detection.
-
-        The OXTS data contains several important measurements:
-
-        1. Latitude, longitude, and altitude: These are the global coordinates of the moving platform.
-        2. Roll, pitch, and yaw (heading): These are the orientation angles of the platform, usually given in Euler angles.
-        3. Velocity (north, east, and down): These are the linear velocities of the platform in the local navigation frame.
-        4. Accelerations (ax, ay, az): These are the linear accelerations in the platform's body frame.
-        5. Angular rates (wx, wy, wz): These are the angular rates (also known as angular velocities) of the platform in its body frame.
-
-        In the KITTI dataset, the OXTS data is stored as plain text files with each line corresponding to a timestamp. Each line in the file contains the aforementioned measurements, which are used to compute the ground truth trajectory and 6-DoF motion of the vehicle. This information can be further used for calibration, data synchronization, and performance evaluation of various algorithms.
-        """
-        poses = []
-
-        def latlon_to_mercator(lat, lon, s):
-            """
-            Converts latitude and longitude coordinates to Mercator coordinates (x, y) using the given scale factor.
-
-            The Mercator projection is a widely used cylindrical map projection that represents the Earth's surface
-            as a flat, rectangular grid, distorting the size of geographical features in higher latitudes.
-            This function uses the scale factor 's' to control the amount of distortion in the projection.
-
-            Args:
-                lat (float): Latitude in degrees, range: -90 to 90.
-                lon (float): Longitude in degrees, range: -180 to 180.
-                s (float): Scale factor, typically the cosine of the reference latitude.
-
-            Returns:
-                list: A list containing the Mercator coordinates [x, y] in meters.
-            """
-            r = 6378137.0  # the Earth's equatorial radius in meters
-            x = s * r * ((np.pi * lon) / 180)
-            y = s * r * np.log(np.tan((np.pi * (90 + lat)) / 360))
-            return [x, y]
-
-        # Compute the initial scale and pose based on the selected frames
-        if selected_frames is None:
-            lat0 = oxts[0][0]
-            scale = np.cos(lat0 * np.pi / 180)
-            pose_0_inv = None
-        else:
-            oxts0 = oxts[selected_frames[0][0]]
-            lat0 = oxts0[0]
-            scale = np.cos(lat0 * np.pi / 180)
-
-            pose_i = np.eye(4)
-
-            [x, y] = latlon_to_mercator(oxts0[0], oxts0[1], scale)
-            z = oxts0[2]
-            translation = np.array([x, y, z])
-            rotation = get_rotation(oxts0[3], oxts0[4], oxts0[5])
-            pose_i[:3, :] = np.concatenate([rotation, translation[:, None]], axis=1)
-            pose_0_inv = invert_transformation(pose_i[:3, :3], pose_i[:3, 3])
-
-        # Iterate through the OXTS data and compute the corresponding pose matrices
-        for oxts_val in oxts:
-            pose_i = np.zeros([4, 4])
-            pose_i[3, 3] = 1
-
-            [x, y] = latlon_to_mercator(oxts_val[0], oxts_val[1], scale)
-            z = oxts_val[2]
-            translation = np.array([x, y, z])
-
-            roll = oxts_val[3]
-            pitch = oxts_val[4]
-            heading = oxts_val[5]
-            rotation = get_rotation(roll, pitch, heading)  # (3,3)
-
-            pose_i[:3, :] = np.concatenate([rotation, translation[:, None]], axis=1)  # (4, 4)
-            if pose_0_inv is None:
-                pose_0_inv = invert_transformation(pose_i[:3, :3], pose_i[:3, 3])
-
-            pose_i = np.matmul(pose_0_inv, pose_i)
-            poses.append(pose_i)
-
-        return np.array(poses)
-
-    # If there is no tracking path specified, use the default path
-    if oxts_path_tracking is None:
-        oxts_path = os.path.join(basedir, "oxts/data")
-        oxts = np.array([np.loadtxt(os.path.join(oxts_path, file)) for file in sorted(os.listdir(oxts_path))])
-        calibration_path = os.path.dirname(basedir)
-
-        calibrations = calib_from_txt(calibration_path)
-
-        focal = calibrations[4]
-
-        poses = oxts_to_pose(oxts)
-
-    # If a tracking path is specified, use it to load OXTS data and compute the poses
-    else:
-        oxts_tracking = np.loadtxt(oxts_path_tracking)
-        poses = oxts_to_pose(oxts_tracking)  # (n_frames, 4, 4)
-        calibrations = None
-        focal = None
-        # Set velodyne close to z = 0
-        # poses[:, 2, 3] -= 0.8
-
-    # Return the poses, calibrations, and focal length
-    return poses, calibrations, focal
-
-
-def get_camera_poses_tracking(poses_velo_w_tracking, tracking_calibration, selected_frames, scene_no=None):
-    exp = False
-    camera_poses = []
-
-    opengl2kitti = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-
-    start_frame = selected_frames[0]
-    end_frame = selected_frames[1]
-
-    #####################
-    # Debug Camera offset
-    if scene_no == 2:
-        yaw = np.deg2rad(0.7)  ## Affects camera rig roll: High --> counterclockwise
-        pitch = np.deg2rad(-0.5)  ## Affects camera rig yaw: High --> Turn Right
-        # pitch = np.deg2rad(-0.97)
-        roll = np.deg2rad(0.9)  ## Affects camera rig pitch: High -->  up
-        # roll = np.deg2rad(1.2)
-    elif scene_no == 1:
-        if exp:
-            yaw = np.deg2rad(0.3)  ## Affects camera rig roll: High --> counterclockwise
-            pitch = np.deg2rad(-0.6)  ## Affects camera rig yaw: High --> Turn Right
-            # pitch = np.deg2rad(-0.97)
-            roll = np.deg2rad(0.75)  ## Affects camera rig pitch: High -->  up
-            # roll = np.deg2rad(1.2)
-        else:
-            yaw = np.deg2rad(0.5)  ## Affects camera rig roll: High --> counterclockwise
-            pitch = np.deg2rad(-0.5)  ## Affects camera rig yaw: High --> Turn Right
-            roll = np.deg2rad(0.75)  ## Affects camera rig pitch: High -->  up
-    else:
-        yaw = np.deg2rad(0.05)
-        pitch = np.deg2rad(-0.75)
-        # pitch = np.deg2rad(-0.97)
-        roll = np.deg2rad(1.05)
-        # roll = np.deg2rad(1.2)
-
-    cam_debug = np.eye(4)
-    cam_debug[:3, :3] = get_rotation(roll, pitch, yaw)
-
-    Tr_cam2camrect = tracking_calibration["Tr_cam2camrect"]
-    Tr_cam2camrect = np.matmul(Tr_cam2camrect, cam_debug)
-    Tr_camrect2cam = invert_transformation(Tr_cam2camrect[:3, :3], Tr_cam2camrect[:3, 3])
-    Tr_velo2cam = tracking_calibration["Tr_velo2cam"]
-    Tr_cam2velo = invert_transformation(Tr_velo2cam[:3, :3], Tr_velo2cam[:3, 3])
-
-    camera_poses_imu = []
-    for cam in camera_ls:
-        Tr_camrect2cam_i = tracking_calibration["Tr_camrect2cam0" + str(cam)]
-        Tr_cam_i2camrect = invert_transformation(Tr_camrect2cam_i[:3, :3], Tr_camrect2cam_i[:3, 3])
-        # transform camera axis from kitti to opengl for nerf:
-        cam_i_camrect = np.matmul(Tr_cam_i2camrect, opengl2kitti)
-        cam_i_cam0 = np.matmul(Tr_camrect2cam, cam_i_camrect)
-        cam_i_velo = np.matmul(Tr_cam2velo, cam_i_cam0)
-
-        cam_i_w = np.matmul(poses_velo_w_tracking, cam_i_velo)
-        camera_poses_imu.append(cam_i_w)
-
-    for i, cam in enumerate(camera_ls):
-        for frame_no in range(start_frame, end_frame + 1):
-            camera_poses.append(camera_poses_imu[i][frame_no])
-
-    return np.array(camera_poses)
 
 
 def cuboid_to_3d_points(cuboid):
@@ -477,7 +141,7 @@ def cuboid_in_which_camera(cuboid, camera_names:List[str], cameras:dict[str, pan
 
 
 
-def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selected_frames: List[int], transform_matrix:np.ndarray, camera_names:List[str], cameras:dict[str, pandaset.sensors.Camera]):
+def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selected_frames: List[int], transform_matrix:np.ndarray, camera_names:List[str], cameras:dict[str, pandaset.sensors.Camera], fn_coordinates_conversion: Optional[Callable[[np.ndarray], np.ndarray]]):
     """
     Extracts object pose information from the pandaset dataset for the specified frames.
     
@@ -706,252 +370,7 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
 
     return visible_objects, objects_meta
 
-def get_obj_pose_tracking(tracklet_path, poses_imu_tracking, calibrations, selected_frames, transform_matrix):
-    """
-    Extracts object pose information from the KITTI motion tracking dataset for the specified frames.
 
-    Parameters
-    ----------
-    tracklet_path : str
-        Path to the text file containing tracklet information.  A tracklet is a small sequence of object positions and orientations over time, often used in the context of object tracking and motion estimation in computer vision. In a dataset, a tracklet usually represents a single object's pose information across multiple consecutive frames. This information includes the object's position, orientation (usually as rotation around the vertical axis, i.e., yaw angle), and other attributes like object type, dimensions, etc.  In the KITTI dataset, tracklets are used to store and provide ground truth information about dynamic objects in the scene, such as cars, pedestrians, and cyclists.
-
-    poses_imu_tracking : list of numpy arrays
-        A list of 4x4 transformation matrices representing the poses (positions and orientations) of the ego vehicle A(the main vehicle equipped with sensors) in Inertial Measurement Unit (IMU) coordinates at different time instances (frames). Each matrix in the list corresponds to a single frame in the dataset.
-
-    calibrations : dict
-        Dictionary containing calibration information:
-            - "Tr_velo2cam": 3x4 transformation matrix from Velodyne coordinates to camera coordinates.
-            - "Tr_imu2velo": 3x4 transformation matrix from IMU coordinates to Velodyne coordinates.
-
-    selected_frames : list of int
-        List of two integers specifying the start and end frames to process.
-
-    Returns
-    -------
-    visible_objects : numpy array
-        Array of visible objects with dimensions [2*(end_frame-start_frame+1), max_obj_per_frame, 14] which stores information about the visible objects in each frame for both stereo cameras.
-        Contains information about frame number, camera number, object ID, object type, dimensions, 3D pose, and moving status. (explained later in Notes)
-
-    objects_meta : dict
-        Dictionary containing metadata for objects in the scene, with object IDs as keys and metadata as values.
-        Metadata includes object ID(float), length, height, width, and object type(float).
-
-    Notes
-    -----
-    The visible_objects array contains the following information for each object:
-        0: frame number
-        1: camera number
-        2: object ID
-        3: object type
-        4: object length
-        5: object height
-        6: object width
-        7: x coordinate of the object in world coordinates
-        8: y coordinate of the object in world coordinates
-        9: z coordinate of the object in world coordinates
-        10: yaw angle of the object in world coordinates
-        11: unused
-        12: unused
-        13: is_moving flag (1.0 for moving objects, -1.0 for non-moving objects)
-
-        The objects_meta dictionary has the following structure:
-            key: object ID (integer)
-            value: numpy array containing the following information:
-                0: object ID (as a float)
-                1: object length
-                2: object height
-                3: object width
-                4: object type (as a float)
-    """
-
-    # Helper function to generate a rotation matrix around the y-axis
-    def roty_matrix(roty):
-        c = np.cos(roty)
-        s = np.sin(roty)
-        return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
-
-    # Extract calibration data
-    velo2cam = calibrations["Tr_velo2cam"]
-    imu2velo = calibrations["Tr_imu2velo"]
-    cam2velo = invert_transformation(velo2cam[:3, :3], velo2cam[:3, 3])
-    velo2imu = invert_transformation(imu2velo[:3, :3], imu2velo[:3, 3])
-
-    # Initialize dictionaries and lists to store object metadata and tracklets
-    objects_meta_kitti = {}
-    objects_meta = {}
-    tracklets_ls = []
-
-    start_frame = selected_frames[0]
-    end_frame = selected_frames[1]
-
-    # Read tracklets from file
-    f = open(tracklet_path)
-    tracklets_str = f.read().splitlines()
-
-    # Total number of frames in the scene
-    n_scene_frames = len(poses_imu_tracking)
-    # Initialize an array to count the number of objects in each frame
-    n_obj_in_frame = np.zeros(n_scene_frames)
-
-    # Extract metadata for all objects in the scene
-    for tracklet in tracklets_str:
-        tracklet = tracklet.split()
-        if float(tracklet[1]) < 0:
-            continue
-        id = tracklet[1]
-        if tracklet[2] in _sem2label:
-            type = _sem2label[tracklet[2]]
-            if not int(id) in objects_meta_kitti:
-                length = float(tracklet[12])
-                height = float(tracklet[10])
-                width = float(tracklet[11])
-                # length = float(tracklet[12])
-                # height = float(tracklet[10])
-                # width = float(tracklet[11])
-                objects_meta_kitti[int(id)] = np.array([float(id), type, length, height, width])
-
-            """
-            The first two elements (frame number and object ID) as float64.
-            The object type (converted from the semantic label) as a float.
-            The remaining elements of the tracklet (3D position, rotation, and dimensions) as float64.
-            """
-            tr_array = np.concatenate(
-                [np.array(tracklet[:2]).astype(np.float64), np.array([type]), np.array(tracklet[3:]).astype(np.float64)]
-            )
-            tracklets_ls.append(tr_array)
-            n_obj_in_frame[int(tracklet[0])] += 1
-
-    # Convert tracklets to a numpy array
-    tracklets_array = np.array(tracklets_ls)
-
-    # Find the maximum number of objects in a frame for the selected frames
-    max_obj_per_frame = int(n_obj_in_frame[start_frame : end_frame + 1].max())
-    # Initialize an array to store visible objects with dimensions [2*(end_frame-start_frame+1), max_obj_per_frame, 14]
-    visible_objects = np.ones([(end_frame - start_frame + 1) * 2, max_obj_per_frame, 14]) * -1.0
-
-    # Iterate through the tracklets and process object data
-    for tracklet in tracklets_array:
-        frame_no = tracklet[0]
-        if start_frame <= frame_no <= end_frame:
-            obj_id = tracklet[1]
-            frame_id = np.array([frame_no])
-            id_int = int(obj_id)
-            obj_type = np.array([objects_meta_kitti[id_int][1]])
-            dim = objects_meta_kitti[id_int][-3:].astype(np.float32)
-
-            if id_int not in objects_meta:
-                objects_meta[id_int] = np.concatenate(
-                    [
-                        np.array([id_int]).astype(np.float32),
-                        objects_meta_kitti[id_int][2:].astype(np.float64),
-                        np.array([objects_meta_kitti[id_int][1]]).astype(np.float64),
-                    ]
-                )
-
-            # Extract object pose data from tracklet
-            pose = tracklet[-4:]
-
-            # Initialize a 4x4 identity matrix for object pose in camera coordinates
-            obj_pose_c = np.eye(4)
-            obj_pose_c[:3, 3] = pose[:3]
-            roty = pose[3]
-            obj_pose_c[:3, :3] = roty_matrix(roty)
-
-            # Transform object pose from camera coordinates to IMU coordinates
-            obj_pose_imu = np.matmul(velo2imu, np.matmul(cam2velo, obj_pose_c))
-
-            # Get the IMU pose for the corresponding frame
-            pose_imu_w_frame_i = poses_imu_tracking[int(frame_id)]
-
-            # Calculate the world pose of the object
-            pose_obj_w_i = np.matmul(pose_imu_w_frame_i, obj_pose_imu)
-            pose_obj_w_i = np.matmul(transform_matrix, pose_obj_w_i)
-            # pose_obj_w_i[:, 3] *= scale_factor
-
-            # Calculate the approximate yaw angle of the object in the world frame
-            yaw_aprox = -np.arctan2(pose_obj_w_i[1, 0], pose_obj_w_i[0, 0])
-
-            # TODO: Change if necessary
-            is_moving = 1.0
-
-            # Create a 7-element array representing the 3D pose of the object
-            pose_3d = np.array([pose_obj_w_i[0, 3], pose_obj_w_i[1, 3], pose_obj_w_i[2, 3], yaw_aprox, 0, 0, is_moving])
-
-            # Iterate through the available cameras
-            for j, cam in enumerate(camera_ls):
-                cam = np.array(cam).astype(np.float32)[None]
-                # Create an array representing the object data for this camera view
-                obj = np.concatenate([frame_id, cam, np.array([obj_id]), obj_type, dim, pose_3d])
-                frame_cam_id = (int(frame_no) - start_frame) + j * (end_frame + 1 - start_frame)
-                obj_column = np.argwhere(visible_objects[frame_cam_id, :, 0] < 0).min()
-                visible_objects[frame_cam_id, obj_column] = obj
-
-    # # Remove not moving objects
-    # print("Removing non moving objects")
-    # obj_to_del = []
-    # for key, values in objects_meta.items():
-    #     all_obj_poses = np.where(visible_objects[:, :, 2] == key)
-    #     if len(all_obj_poses[0]) > 0 and values[4] != 4.0:
-    #         frame_intervall = all_obj_poses[0][[0, -1]]
-    #         y = all_obj_poses[1][[0, -1]]
-    #         obj_poses = visible_objects[frame_intervall, y][:, 7:10]
-    #         distance = np.linalg.norm(obj_poses[1] - obj_poses[0])
-    #         print(distance)
-    #         if distance < 0.5 * scale_factor:
-    #             print("Removed:", key)
-    #             obj_to_del.append(key)
-    #             visible_objects[all_obj_poses] = np.ones(14) * -1.0
-
-    # # Remove metadata for the non-moving objects
-    # for key in obj_to_del:
-    #     del objects_meta[key]
-
-    return visible_objects, objects_meta
-
-
-def get_scene_images_tracking(
-    tracking_path, sequence, selected_frames, use_depth=False, use_semantic=False, semantic_path=None
-):
-    [start_frame, end_frame] = selected_frames
-    # imgs = []
-    img_name = []
-    depth_name = []
-    semantic_name = []
-
-    left_img_path = os.path.join(os.path.join(tracking_path, "image_02"), sequence)
-    right_img_path = os.path.join(os.path.join(tracking_path, "image_03"), sequence)
-
-    if use_depth:
-        left_depth_path = os.path.join(os.path.join(tracking_path, "completion_02"), sequence)
-        right_depth_path = os.path.join(os.path.join(tracking_path, "completion_03"), sequence)
-
-    for frame_dir in [left_img_path, right_img_path]:
-        for frame_no in range(len(os.listdir(left_img_path))):
-            if start_frame <= frame_no <= end_frame:
-                frame = sorted(os.listdir(frame_dir))[frame_no]
-                fname = os.path.join(frame_dir, frame)
-                # imgs.append(imageio.imread(fname))
-                img_name.append(fname)
-
-    if use_depth:
-        for frame_dir in [left_depth_path, right_depth_path]:
-            for frame_no in range(len(os.listdir(left_depth_path))):
-                if start_frame <= frame_no <= end_frame:
-                    frame = sorted(os.listdir(frame_dir))[frame_no]
-                    fname = os.path.join(frame_dir, frame)
-                    depth_name.append(fname)
-
-    if use_semantic:
-        frame_dir = os.path.join(semantic_path, "train", sequence)
-        for _ in range(2):
-            for frame_no in range(len(os.listdir(frame_dir))):
-                if start_frame <= frame_no <= end_frame:
-                    frame = sorted(os.listdir(frame_dir))[frame_no]
-                    fname = os.path.join(frame_dir, frame)
-                    semantic_name.append(fname)
-
-    # imgs = (np.maximum(np.minimum(np.array(imgs), 255), 0) / 255.0).astype(np.float32)
-    return img_name, depth_name, semantic_name
 
 
 def get_rays_np(H, W, focal, c2w):
@@ -1128,9 +547,9 @@ def extract_object_information(args, visible_objects, objects_meta):
         sh = obj_state.shape
     elif args.dataset_type == "pandaset":
         # TODO PIERRE
-        # obj_state = visible_objects[:, :, [7, 8, 9, 2, 3]]  # [x,y,z,track_id,class_id]
-        # obj_dir = visible_objects[:, :, 10][..., None]  # yaw_angle
-        # sh = obj_state.shape
+        obj_state = visible_objects[:, :, [7, 8, 9, 2, 3]]  # [x,y,z,track_id,class_id]
+        obj_dir = visible_objects[:, :, 10][..., None]  # yaw_angle
+        sh = obj_state.shape
         pass
 
     # obj_state: [cam, n_obj, [x,y,z,track_id, class_id]]
@@ -1214,7 +633,7 @@ class MarsPandasetDataParserConfig(DataParserConfig):
     """alpha color of background"""
     first_frame: int = 0
     """specifies the beginning of a sequence if not the complete scene is taken as Input"""
-    last_frame: int = 79
+    last_frame: int = 9
     """specifies the end of a sequence"""
     use_object_properties: bool = True
     """ use pose and properties of visible objects as an input """
@@ -1225,10 +644,10 @@ class MarsPandasetDataParserConfig(DataParserConfig):
     box_scale: float = 1.5
     """Maximum scale for bboxes to include shadows"""
     novel_view: str = "left"
-    use_obj: bool = False # TODO for pierre test
+    use_obj: bool = True # TODO for pierre test
     render_only: bool = False
     bckg_only: bool = False
-    use_object_properties: bool = False # TODO for pierre test
+    use_object_properties: bool = True # TODO for pierre test
     near_plane: float = 0.5
     """specifies the distance from the last pose to the near plane"""
     far_plane: float = 150.0
@@ -1298,6 +717,28 @@ class MarsPandasetParser(DataParser):
         self.debug_local = False
         self.use_semantic = config.use_semantic
         self.semantic_path = config.semantic_path
+
+    def coordinates_conversion(self, pose:np.ndarray):
+        c2w = pose.copy()
+        flip_mat = np.array([
+            [1, 0, 0, 0],
+            [0, -1, 0, 0],
+            [0, 0, -1, 0],
+            [0, 0, 0, 1]
+        ])
+        flip_mat2 = np.array([
+            [0, -1, 0, 0],
+            [1, 0, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ])
+        # just for debug purpose, uncomment this part if used to train with nerfstudio
+        c2w[0:3,2] *= -1 # flip the y and z axis
+        c2w[0:3,1] *= -1
+        c2w = c2w[[1,0,2,3],:]
+        c2w[2,:] *= -1 # flip whole world upside down
+        return(flip_mat2 @ flip_mat @ c2w)
+
 
     def _generate_dataparser_outputs(self, split="train"):
         visible_objects_ls = []
@@ -1465,12 +906,12 @@ class MarsPandasetParser(DataParser):
         # )
 
         # Get Object poses
-        visible_objects_, objects_meta_ = get_obj_pose_tracking_pandaset(seq.cuboids, self.selected_frames, np.eye(4), self.cameras_name_list, seq.camera)
+        visible_objects_, objects_meta_ = get_obj_pose_tracking_pandaset(seq.cuboids, self.selected_frames, np.eye(4), self.cameras_name_list, seq.camera, self.coordinates_conversion)
             
-        # # # Align Axis with vkitti axis
-        # #poses = np.matmul(kitti2vkitti, cam_poses_tracking).astype(np.float32)
-        # visible_objects_[:, :, [9]] *= -1
-        # visible_objects_[:, :, [7, 8, 9]] = visible_objects_[:, :, [7, 9, 8]]
+        # # Align Axis with vkitti axis
+        #poses = np.matmul(kitti2vkitti, cam_poses_tracking).astype(np.float32)
+        visible_objects_[:, :, [9]] *= -1 # TODO pierre to redo with the right coordinates system
+        visible_objects_[:, :, [7, 8, 9]] = visible_objects_[:, :, [7, 9, 8]]
 
         # # oriented = torch.from_numpy(np.array(poses).astype(np.float32))
         # # oriented, transform_matrix = camera_utils.auto_orient_and_center_poses(
@@ -1488,33 +929,32 @@ class MarsPandasetParser(DataParser):
         # #     )
         # # )[:, :, :3, 0]
 
-        # visible_objects_ls.append(visible_objects_)
-        # objects_meta_ls.append(objects_meta_)
+        visible_objects_ls.append(visible_objects_)
+        objects_meta_ls.append(objects_meta_)
 
-        # objects_meta = objects_meta_ls[0]
-        # N_obj = np.array([len(seq_objs[0]) for seq_objs in visible_objects_ls]).max()
-        # for seq_i, visible_objects in enumerate(visible_objects_ls):
-        #     diff = N_obj - len(visible_objects[0])
-        #     if diff > 0:
-        #         fill = np.ones([np.shape(visible_objects)[0], diff, np.shape(visible_objects)[2]]) * -1
-        #         visible_objects = np.concatenate([visible_objects, fill], axis=1)
-        #         visible_objects_ls[seq_i] = visible_objects
+        objects_meta = objects_meta_ls[0]
+        N_obj = np.array([len(seq_objs[0]) for seq_objs in visible_objects_ls]).max()
+        for seq_i, visible_objects in enumerate(visible_objects_ls):
+            diff = N_obj - len(visible_objects[0])
+            if diff > 0:
+                fill = np.ones([np.shape(visible_objects)[0], diff, np.shape(visible_objects)[2]]) * -1
+                visible_objects = np.concatenate([visible_objects, fill], axis=1)
+                visible_objects_ls[seq_i] = visible_objects
 
-        #     if seq_i != 0:
-        #         objects_meta.update(objects_meta_ls[seq_i])
+            if seq_i != 0:
+                objects_meta.update(objects_meta_ls[seq_i])
 
-        # visible_objects = np.concatenate(visible_objects_ls)
+        visible_objects = np.concatenate(visible_objects_ls)
 
-        # if visible_objects is not None:
-        #     self.config.max_input_objects = visible_objects.shape[1]
-        # else:
-        #     self.config.max_input_objects = 0
+        if visible_objects is not None:
+            self.config.max_input_objects = visible_objects.shape[1]
+        else:
+            self.config.max_input_objects = 0
 
-        # # count = np.array(range(len(visible_objects)))
-        # # i_split = [np.sort(count[:]), count[int(0.8 * len(count)) :], count[int(0.8 * len(count)) :]]
-        # # i_train, i_val, i_test = i_split
+        # count = np.array(range(len(visible_objects)))
+        # i_split = [np.sort(count[:]), count[int(0.8 * len(count)) :], count[int(0.8 * len(count)) :]]
+        # i_train, i_val, i_test = i_split
 
-        visible_objects = None
         counts = np.arange(len(image_filenames))
         i_test = np.array([(idx + 1) % 4 == 0 for idx in counts])
         
@@ -1624,12 +1064,12 @@ class MarsPandasetParser(DataParser):
             obj_nodes = np.reshape(obj_nodes, [n_input_frames, self.max_input_objects * add_input_rows, 3])
 
         # obj_meta_ls = []
-        # obj_meta_tensor = torch.from_numpy(np.array(obj_meta_ls, dtype="float32"))  # TODO
+        obj_meta_tensor = torch.from_numpy(np.array(obj_meta_ls, dtype="float32"))  # TODO
 
-        # obj_meta_tensor[..., 1:4] *= self.scale_factor
-        # poses[..., :3, 3] *= self.scale_factor
+        obj_meta_tensor[..., 1:4] *= self.scale_factor
+        poses[..., :3, 3] *= self.scale_factor
 
-        # self.config.add_input_rows = add_input_rows
+        self.config.add_input_rows = add_input_rows
         if split == "train":
             indices = i_train
         elif split == "val":
@@ -1654,49 +1094,48 @@ class MarsPandasetParser(DataParser):
         # rays_rgb_env = rays_rgb
         input_size = 0
 
-        # obj_nodes_tensor = torch.from_numpy(obj_nodes)
-        # # if self.config.fast_loading:
-        # #     obj_nodes_tensor = obj_nodes_tensor.cuda()
-        # obj_nodes_tensor = obj_nodes_tensor[:, :, None, ...].repeat_interleave(image_width, dim=2)
-        # obj_nodes_tensor = obj_nodes_tensor[:, :, None, ...].repeat_interleave(image_height, dim=2)
+        obj_nodes_tensor = torch.from_numpy(obj_nodes)
+        # if self.config.fast_loading:
+        #     obj_nodes_tensor = obj_nodes_tensor.cuda()
+        obj_nodes_tensor = obj_nodes_tensor[:, :, None, ...].repeat_interleave(image_width[0], dim=2)
+        obj_nodes_tensor = obj_nodes_tensor[:, :, None, ...].repeat_interleave(image_height[0], dim=2)
 
-        # obj_size = self.max_input_objects * add_input_rows
-        # input_size += obj_size
-        # # [N, ro+rd+rgb+obj_nodes, H, W, 3]
-        # # rays_rgb_env = np.concatenate([rays_rgb_env, obj_nodes], 1)
+        obj_size = self.max_input_objects * add_input_rows
+        input_size += obj_size
+        # [N, ro+rd+rgb+obj_nodes, H, W, 3]
+        # rays_rgb_env = np.concatenate([rays_rgb_env, obj_nodes], 1)
 
-        # # [N, H, W, ro+rd+rgb+obj_nodes*max_obj, 3]
-        # # with obj_nodes [(x+y+z)*max_obj + (obj_id+is_training+0)*max_obj]
-        # obj_nodes_tensor = obj_nodes_tensor.permute([0, 2, 3, 1, 4]).cpu()
-        # # obj_nodes = np.stack([obj_nodes[i] for i in i_train], axis=0)  # train images only
-        # obj_info = torch.cat([obj_nodes_tensor[i : i + 1] for i in indices], dim=0)
+        # [N, H, W, ro+rd+rgb+obj_nodes*max_obj, 3]
+        # with obj_nodes [(x+y+z)*max_obj + (obj_id+is_training+0)*max_obj]
+        obj_nodes_tensor = obj_nodes_tensor.permute([0, 2, 3, 1, 4]).cpu()
+        # obj_nodes = np.stack([obj_nodes[i] for i in i_train], axis=0)  # train images only
+        obj_info = torch.cat([obj_nodes_tensor[i : i + 1] for i in indices], dim=0)
 
-        # # """
-        # # obj_info: n_images * image height * image width * (rays_o, rays_d, rgb, add_input_rows * n_max_obj) * 3
-        # # add_input_rows = 2 for kitti:
-        # #     the object info is represented as a 6-dim vector (~2*3, add_input_rows=2):
-        # #     0~2. x, y, z position of the object
-        # #     3. yaw angle of the object
-        # #     4. object id: not track id. track_id = obj_meta[object_id][0]
-        # #     5. 0 (no use, empty digit)
-        # # """
-        # # obj_info = torch.from_numpy(
-        # #     np.reshape(rays_rgb, [image_n, image_height, image_width, 3 + input_size, 3])[:, :, :, 3:, :]
-        # # )
+        # """
+        # obj_info: n_images * image height * image width * (rays_o, rays_d, rgb, add_input_rows * n_max_obj) * 3
+        # add_input_rows = 2 for kitti:
+        #     the object info is represented as a 6-dim vector (~2*3, add_input_rows=2):
+        #     0~2. x, y, z position of the object
+        #     3. yaw angle of the object
+        #     4. object id: not track id. track_id = obj_meta[object_id][0]
+        #     5. 0 (no use, empty digit)
+        # """
+        # obj_info = torch.from_numpy(
+        #     np.reshape(rays_rgb, [image_n, image_height, image_width, 3 + input_size, 3])[:, :, :, 3:, :]
+        # )
 
         image_filenames = [image_filenames[i] for i in indices]
-        # depth_name = [] # TODO pierre
         if self.config.use_depth:
             depth_filenames = [depth_name[i] for i in indices] if self.config.use_depth else None
         else:
             depth_filenames = []
         if self.use_semantic:
             semantic_meta.filenames = [semantic_name[i] for i in indices]
-        poses = poses[indices]
-        cx = cx[indices]
-        cy = cy[indices]
-        fx = fx[indices]
-        fy = fy[indices]
+        poses = poses[indices].astype(np.float32)
+        cx = cx[indices].astype(np.float32)
+        cy = cy[indices].astype(np.float32)
+        fx = fx[indices].astype(np.float32)
+        fy = fy[indices].astype(np.float32)
         image_width = image_width[indices]
         image_height = image_height[indices]
         camera_type = camera_type[indices]
@@ -1756,10 +1195,10 @@ class MarsPandasetParser(DataParser):
             dataparser_scale=self.scale_factor,
             metadata={
                  "depth_filenames": depth_filenames,
-            #     "obj_metadata": obj_meta_tensor if len(obj_meta_tensor) > 0 else None,
-            #     "obj_class": scene_classes if len(scene_classes) > 0 else None,
-            #     "scene_obj": scene_objects if len(scene_objects) > 0 else None,
-            #     "obj_info": obj_info if len(obj_info) > 0 else None,
+                "obj_metadata": obj_meta_tensor if len(obj_meta_tensor) > 0 else None,
+                "obj_class": scene_classes if len(scene_classes) > 0 else None,
+                "scene_obj": scene_objects if len(scene_objects) > 0 else None,
+                "obj_info": obj_info if len(obj_info) > 0 else None,
                 "scale_factor": self.scale_factor,
             #     "semantics": semantic_meta,
             },
