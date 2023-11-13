@@ -42,12 +42,17 @@ from nerfstudio.utils.io import load_from_json
 
 from pandaset import DataSet
 from pandaset import geometry
+import pandaset.sensors
+import pandaset.annotations
+import pandas as pd
 
 import transforms3d
 
 CONSOLE = Console(width=120)
 _sem2label = {"Misc": -1, "Car": 0, "Van": 0, "Truck": 2, "Tram": 3, "Pedestrian": 4}
 camera_ls = [2, 3]
+
+_sem2label_pandaset = {"Car": 0, "Pickup Truck": 0, "Medium-sized Truck": 2, "Semi-truck": 2, "Tram / Subway": 3, "Train": 3, "Trolley": 3}
 
 
 def kitti_string_to_float(str):
@@ -394,6 +399,312 @@ def get_camera_poses_tracking(poses_velo_w_tracking, tracking_calibration, selec
 
     return np.array(camera_poses)
 
+
+def cuboid_to_3d_points(cuboid):
+    yaw = cuboid['yaw']
+    x = cuboid['position.x']
+    y = cuboid['position.y']
+    z = cuboid['position.z']
+    translation = np.array([[x, y, z]]).T
+
+    dimension_x = cuboid['dimensions.x']
+    dimension_y = cuboid['dimensions.y']
+    dimension_z = cuboid['dimensions.z']
+
+    Tr = transforms3d.euler.euler2mat(0, 0, yaw)
+    p0 = Tr@np.array([[dimension_x/2, dimension_y/2, dimension_z/2]]).T + translation
+    p1 = Tr@np.array([[-dimension_x/2, dimension_y/2, dimension_z/2]]).T + translation
+    p2 = Tr@np.array([[-dimension_x/2, -dimension_y/2, dimension_z/2]]).T + translation
+    p3 = Tr@np.array([[dimension_x/2, -dimension_y/2, dimension_z/2]]).T + translation
+    p4 = Tr@np.array([[dimension_x/2, dimension_y/2, -dimension_z/2]]).T + translation
+    p5 = Tr@np.array([[-dimension_x/2, dimension_y/2, -dimension_z/2]]).T + translation
+    p6 = Tr@np.array([[-dimension_x/2, -dimension_y/2, -dimension_z/2]]).T + translation
+    p7 = Tr@np.array([[dimension_x/2, -dimension_y/2, -dimension_z/2]]).T + translation
+    pts = np.hstack((p0,p1,p2,p3,p4,p5,p6,p7)).T
+
+    return pts
+
+def heading_position_to_mat(heading, position):
+    quat = np.array([heading["w"], heading["x"], heading["y"], heading["z"]])
+    pos = np.array([position["x"], position["y"], position["z"]])
+    transform_matrix = transforms3d.affines.compose(np.array(pos),
+                                           transforms3d.quaternions.quat2mat(quat),
+                                           [1.0, 1.0, 1.0])
+    return transform_matrix
+
+def cuboid_in_which_camera(cuboid, camera_names:List[str], cameras:dict[str, pandaset.sensors.Camera], frame_id:int) -> List[str]:
+    camera_visible_list = []
+    cuboid_points = cuboid_to_3d_points(cuboid)
+    if cuboid_points.shape[0]%8!=0:
+        raise ValueError('cuboid_points as to have a length multiple of 8 points')
+    for camera_name in camera_names:
+        camera = cameras[camera_name]
+        camera_data = camera[frame_id]
+
+        camera_heading = camera.poses[frame_id]['heading']
+        camera_position = camera.poses[frame_id]['position']
+
+        camera_pose_mat = heading_position_to_mat(camera_heading, camera_position)
+        trans_lidar_to_camera = np.linalg.inv(camera_pose_mat)
+        points3d_lidar = cuboid_points
+        points3d_camera = trans_lidar_to_camera[:3, :3] @ (points3d_lidar.T) + \
+                            trans_lidar_to_camera[:3, 3].reshape(3, 1)
+        K = np.eye(3, dtype=np.float64)
+        K[0, 0] = camera.intrinsics.fx
+        K[1, 1] = camera.intrinsics.fy
+        K[0, 2] = camera.intrinsics.cx
+        K[1, 2] = camera.intrinsics.cy
+
+        inliner_indices_arr = np.arange(points3d_camera.shape[1])
+
+        condition = points3d_camera[2, :] > 0.0
+        points3d_camera = points3d_camera[:, condition]
+        inliner_indices_arr = inliner_indices_arr[condition]
+        points2d_camera = K @ points3d_camera
+        points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T
+        image_w, image_h = camera_data.size
+
+        condition = np.logical_and(
+            (points2d_camera[:, 1] < image_h) & (points2d_camera[:, 1] > 0),
+            (points2d_camera[:, 0] < image_w) & (points2d_camera[:, 0] > 0))
+
+        if np.any(condition):
+            if camera_name not in camera_visible_list:
+                camera_visible_list.append(camera_name)
+    
+        return camera_visible_list
+
+
+
+
+def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selected_frames: List[int], transform_matrix:np.ndarray, camera_names:List[str], cameras:dict[str, pandaset.sensors.Camera]):
+    """
+    Extracts object pose information from the pandaset dataset for the specified frames.
+    
+    Parameters
+    ----------
+    cuboids : panda cuboids DataFrame ()
+        Path to the text file containing tracklet information.  A tracklet is a small sequence of object positions and orientations over time, often used in the context of object tracking and motion estimation in computer vision. In a dataset, a tracklet usually represents a single object's pose information across multiple consecutive frames. This information includes the object's position, orientation (usually as rotation around the vertical axis, i.e., yaw angle), and other attributes like object type, dimensions, etc.  In the KITTI dataset, tracklets are used to store and provide ground truth information about dynamic objects in the scene, such as cars, pedestrians, and cyclists.
+
+    selected_frames : list of int
+        List of two integers specifying the start and end frames to process.
+
+    camera_names: list of string
+        Pandaset camera name considered
+
+    cameras: dict[camera_name:str, pandaset.sensors.Camera]
+
+    Returns
+    -------
+    visible_objects : numpy array
+        Array of visible objects with dimensions [2*(end_frame-start_frame+1), max_obj_per_frame, 14] which stores information about the visible objects in each frame for both stereo cameras.
+        Contains information about frame number, camera number, object ID, object type, dimensions, 3D pose, and moving status. (explained later in Notes)
+
+    objects_meta : dict
+        Dictionary containing metadata for objects in the scene, with object IDs as keys and metadata as values.
+        Metadata includes object ID(float), length, height, width, and object type(float).
+
+    Notes
+    -----
+    The visible_objects array contains the following information for each object:
+        0: frame number
+        1: camera number
+        2: object ID
+        3: object type
+        4: object length
+        5: object height
+        6: object width
+        7: x coordinate of the object in world coordinates
+        8: y coordinate of the object in world coordinates
+        9: z coordinate of the object in world coordinates
+        10: yaw angle of the object in world coordinates
+        11: unused
+        12: unused
+        13: is_moving flag (1.0 for moving objects, -1.0 for non-moving objects)
+
+        The objects_meta dictionary has the following structure:
+            key: object ID (integer)
+            value: numpy array containing the following information:
+                0: object ID (as a float)
+                1: object length
+                2: object height
+                3: object width
+                4: object type (as a float)
+    """
+
+
+        
+
+    # # Helper function to generate a rotation matrix around the y-axis
+    # def roty_matrix(roty):
+    #     c = np.cos(roty)
+    #     s = np.sin(roty)
+    #     return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+    
+    # Initialize dictionaries and lists to store object metadata and tracklets
+    objects_meta_kitti = {}
+    objects_meta = {}
+    tracklets_ls = []
+
+    start_frame = selected_frames[0]
+    end_frame = selected_frames[1]
+
+    uuid_list = []
+    for frame_id in range(start_frame, end_frame + 1):
+        cuboids_frame = cuboids[frame_id]
+        uuid_list.extend(list(cuboids_frame['uuid']))
+    uuid_list = list(set(uuid_list))  
+
+    def uuid_2_id(uuid:str)->int:
+        return uuid_list.index(uuid)
+
+    def is_2_uuid(id:int)->str:
+        return uuid_list[id]
+
+
+    def cam_2_idx(cam):
+        return camera_names.index(cam)
+
+    # Total number of frames in the scene
+    n_scene_frames =  end_frame - start_frame + 1
+    # Initialize an array to count the number of objects in each frame
+    n_obj_in_frame = np.zeros(n_scene_frames)
+    for frame_id in range(start_frame, end_frame + 1):
+        cuboids_frame = cuboids[frame_id]
+        nb_obj = 0
+        for idx_cuboid in range(len(cuboids_frame)):
+            cuboid = cuboids_frame.iloc[idx_cuboid]
+            # il va falloir tester si le cuboid se projecte dans une camera 
+            if cuboid['stationary']:
+                continue
+            cuboid_in_which_cam = cuboid_in_which_camera(cuboid, camera_names, cameras, frame_id)
+            if len(cuboid_in_which_cam)==0:
+                continue
+            #print(cuboid)
+            if cuboid['label'] not in _sem2label_pandaset:
+                continue
+            nb_obj += 1
+            type = _sem2label_pandaset[cuboid['label']]
+            id = uuid_2_id(cuboid['uuid'])
+
+            if not int(id) in objects_meta_kitti:
+                length = float(cuboid['dimensions.x'])
+                width = float(cuboid['dimensions.y'])
+                height = float(cuboid['dimensions.z'])
+                # length = float(tracklet[12])
+                # height = float(tracklet[10])
+                # width = float(tracklet[11])
+                objects_meta_kitti[int(id)] = np.array([float(id), type, length, height, width])
+                """
+                The first two elements (frame number and object ID) as float64.
+                The object type (converted from the semantic label) as a float.
+                The remaining elements of the tracklet (3D position, rotation, and dimensions) as float64.
+                """
+                yaw = cuboid['yaw']
+                x = cuboid['position.x']
+                y = cuboid['position.y']
+                z = cuboid['position.z']
+                tr_array = np.concatenate(
+                    [np.array([frame_id, id]).astype(np.float64), np.array([type]), np.array([x,y,z,yaw, length, height, width]).astype(np.float64)]
+                )
+                tracklets_ls.append(tr_array)
+
+        n_obj_in_frame[frame_id - start_frame] = nb_obj
+
+        
+
+    # Convert tracklets to a numpy array
+    tracklets_array = np.array(tracklets_ls)
+
+    # Find the maximum number of objects in a frame for the selected frames
+    max_obj_per_frame = int(n_obj_in_frame.max())
+    # Initialize an array to store visible objects with dimensions [2*(end_frame-start_frame+1), max_obj_per_frame, 14]
+    visible_objects = np.ones([(end_frame - start_frame + 1) * len(camera_names), max_obj_per_frame, 14]) * -1.0
+
+    # Iterate through the tracklets and process object data
+    for tracklet in tracklets_array:
+        frame_no = tracklet[0]
+        if start_frame <= frame_no <= end_frame:
+            obj_id = tracklet[1]
+            frame_id = np.array([frame_no])
+            id_int = int(obj_id)
+            obj_type = np.array([objects_meta_kitti[id_int][1]])
+            dim = objects_meta_kitti[id_int][-3:].astype(np.float32)
+
+            if id_int not in objects_meta:
+                objects_meta[id_int] = np.concatenate(
+                    [
+                        np.array([id_int]).astype(np.float32),
+                        objects_meta_kitti[id_int][2:].astype(np.float64),
+                        np.array([objects_meta_kitti[id_int][1]]).astype(np.float64),
+                    ]
+                )
+
+            # # Extract object pose data from tracklet
+            # pose = tracklet[-4:]
+
+            # # Initialize a 4x4 identity matrix for object pose in camera coordinates
+            # obj_pose_c = np.eye(4)
+            # obj_pose_c[:3, 3] = pose[:3]
+            # roty = pose[3]
+            # obj_pose_c[:3, :3] = roty_matrix(roty)
+
+            # # Transform object pose from camera coordinates to IMU coordinates
+            # obj_pose_imu = np.matmul(velo2imu, np.matmul(cam2velo, obj_pose_c))
+
+            # # Get the IMU pose for the corresponding frame
+            # pose_imu_w_frame_i = poses_imu_tracking[int(frame_id)]
+
+            # # Calculate the world pose of the object
+            # pose_obj_w_i = np.matmul(pose_imu_w_frame_i, obj_pose_imu)
+            # pose_obj_w_i = np.matmul(transform_matrix, pose_obj_w_i)
+            # # pose_obj_w_i[:, 3] *= scale_factor
+
+            # # Calculate the approximate yaw angle of the object in the world frame
+            # yaw_aprox = -np.arctan2(pose_obj_w_i[1, 0], pose_obj_w_i[0, 0])
+
+            # TODO: Change if necessary
+            is_moving = 1.0
+
+            yaw = tracklet[6]
+            x = tracklet[3]
+            y = tracklet[4]
+            z = tracklet[5]
+            
+            # Create a 7-element array representing the 3D pose of the object
+            pose_3d = np.array([x, y, z, yaw, 0, 0, is_moving])
+
+            # Iterate through the available cameras
+            for j, cam in enumerate(camera_names):
+                cam = cam_2_idx(cam)
+                cam = np.array(cam).astype(np.float32)[None]
+                # Create an array representing the object data for this camera view
+                obj = np.concatenate([frame_id, cam, np.array([obj_id]), obj_type, dim, pose_3d])
+                frame_cam_id = (int(frame_no) - start_frame) + j * (end_frame + 1 - start_frame)
+                obj_column = np.argwhere(visible_objects[frame_cam_id, :, 0] < 0).min()
+                visible_objects[frame_cam_id, obj_column] = obj
+
+    # # Remove not moving objects
+    # print("Removing non moving objects")
+    # obj_to_del = []
+    # for key, values in objects_meta.items():
+    #     all_obj_poses = np.where(visible_objects[:, :, 2] == key)
+    #     if len(all_obj_poses[0]) > 0 and values[4] != 4.0:
+    #         frame_intervall = all_obj_poses[0][[0, -1]]
+    #         y = all_obj_poses[1][[0, -1]]
+    #         obj_poses = visible_objects[frame_intervall, y][:, 7:10]
+    #         distance = np.linalg.norm(obj_poses[1] - obj_poses[0])
+    #         print(distance)
+    #         if distance < 0.5 * scale_factor:
+    #             print("Removed:", key)
+    #             obj_to_del.append(key)
+    #             visible_objects[all_obj_poses] = np.ones(14) * -1.0
+
+    # # Remove metadata for the non-moving objects
+    # for key in obj_to_del:
+    #     del objects_meta[key]
+
+    return visible_objects, objects_meta
 
 def get_obj_pose_tracking(tracklet_path, poses_imu_tracking, calibrations, selected_frames, transform_matrix):
     """
@@ -903,7 +1214,7 @@ class MarsPandasetDataParserConfig(DataParserConfig):
     """alpha color of background"""
     first_frame: int = 0
     """specifies the beginning of a sequence if not the complete scene is taken as Input"""
-    last_frame: int = 40
+    last_frame: int = 79
     """specifies the end of a sequence"""
     use_object_properties: bool = True
     """ use pose and properties of visible objects as an input """
@@ -924,7 +1235,7 @@ class MarsPandasetDataParserConfig(DataParserConfig):
     """specifies the distance from the last pose to the far plane"""
     dataset_type: str = "pandaset"
 
-    seq_name: str = '048'
+    seq_name: str = '109'
     """pandaset sequence name in data folder"""
     cameras_name_list: List[str] = field(default_factory=lambda: ['front_camera'])
     """pandaset camera names to process, possible values are: 'front_camera', 'front_left_camera', 'front_right_camera', 'left_camera', 'right_camera'"""
@@ -1153,11 +1464,9 @@ class MarsPandasetParser(DataParser):
         #     tracking_path, scene_id, sequ_frames, self.config.use_depth, self.use_semantic, self.semantic_path
         # )
 
-        # # Get Object poses
-        # visible_objects_, objects_meta_ = get_obj_pose_tracking(
-        #     tracklet_path, poses_imu_w_tracking, tracking_calibration, sequ_frames, transform_matrix
-        # )
-
+        # Get Object poses
+        visible_objects_, objects_meta_ = get_obj_pose_tracking_pandaset(seq.cuboids, self.selected_frames, np.eye(4), self.cameras_name_list, seq.camera)
+            
         # # # Align Axis with vkitti axis
         # #poses = np.matmul(kitti2vkitti, cam_poses_tracking).astype(np.float32)
         # visible_objects_[:, :, [9]] *= -1
