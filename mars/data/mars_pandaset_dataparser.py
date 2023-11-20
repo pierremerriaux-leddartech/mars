@@ -234,6 +234,7 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
     # Initialize an array to count the number of objects in each frame
     n_obj_in_frame = np.zeros(n_scene_frames)
     for frame_id in range(start_frame, end_frame + 1):
+        cuboid_keeped = []
         cuboids_frame = cuboids[frame_id]
         nb_obj = 0
         for idx_cuboid in range(len(cuboids_frame)):
@@ -264,15 +265,18 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
                 The object type (converted from the semantic label) as a float.
                 The remaining elements of the tracklet (3D position, rotation, and dimensions) as float64.
                 """
-                yaw = cuboid['yaw']
-                x = cuboid['position.x']
-                y = cuboid['position.y']
-                z = cuboid['position.z']
-                tr_array = np.concatenate(
-                    [np.array([frame_id, id]).astype(np.float64), np.array([type]), np.array([x,y,z,yaw, length, height, width]).astype(np.float64)]
-                )
-                tracklets_ls.append(tr_array)
-
+            yaw = cuboid['yaw']
+            x = cuboid['position.x']
+            y = cuboid['position.y']
+            z = cuboid['position.z']
+            tr_array = np.concatenate(
+                [np.array([frame_id, id]).astype(np.float64), np.array([type]), np.array([x,y,z,yaw, length, height, width]).astype(np.float64)]
+            )
+            tracklets_ls.append(tr_array)
+            cuboid_keeped.append(cuboid)
+            # pour choisir entre le cuboid du lidar o ou 1
+            # reprojeter les points qui tombe dans la boite, obtenir les timestamps des points lidar 0 et 1,
+            # et trouver ceux qui sont le plus proche du ts de la camera 
         n_obj_in_frame[frame_id - start_frame] = nb_obj
 
         
@@ -789,25 +793,25 @@ class MarsPandasetParser(DataParser):
                 camera_type.append(CameraType.PERSPECTIVE)
                 pose = camera.poses[frame_idx]
                 Tr = pose_to_Tr(pose)
-                c2w = Tr.copy()
-                flip_mat = np.array([
-                    [1, 0, 0, 0],
-                    [0, -1, 0, 0],
-                    [0, 0, -1, 0],
-                    [0, 0, 0, 1]
-                ])
-                flip_mat2 = np.array([
-                    [0, -1, 0, 0],
-                    [1, 0, 0, 0],
-                    [0, 0, 1, 0],
-                    [0, 0, 0, 1]
-                ])
-                # just for debug purpose, uncomment this part if used to train with nerfstudio
-                c2w[0:3,2] *= -1 # flip the y and z axis
-                c2w[0:3,1] *= -1
-                c2w = c2w[[1,0,2,3],:]
-                c2w[2,:] *= -1 # flip whole world upside down
-                poses.append(flip_mat2 @ flip_mat @ c2w)
+                # c2w = Tr.copy()
+                # flip_mat = np.array([
+                #     [1, 0, 0, 0],
+                #     [0, -1, 0, 0],
+                #     [0, 0, -1, 0],
+                #     [0, 0, 0, 1]
+                # ])
+                # flip_mat2 = np.array([
+                #     [0, -1, 0, 0],
+                #     [1, 0, 0, 0],
+                #     [0, 0, 1, 0],
+                #     [0, 0, 0, 1]
+                # ])
+                # # just for debug purpose, uncomment this part if used to train with nerfstudio
+                # c2w[0:3,2] *= -1 # flip the y and z axis
+                # c2w[0:3,1] *= -1
+                # c2w = c2w[[1,0,2,3],:]
+                # c2w[2,:] *= -1 # flip whole world upside down
+                poses.append(self.coordinates_conversion(Tr))
         
             if self.config.use_depth:
                 import glob
@@ -910,8 +914,9 @@ class MarsPandasetParser(DataParser):
             
         # # Align Axis with vkitti axis
         #poses = np.matmul(kitti2vkitti, cam_poses_tracking).astype(np.float32)
-        visible_objects_[:, :, [9]] *= -1 # TODO pierre to redo with the right coordinates system
-        visible_objects_[:, :, [7, 8, 9]] = visible_objects_[:, :, [7, 9, 8]]
+        # TODO pierre to redo with the right coordinates system
+        # visible_objects_[:, :, [9]] *= -1 
+        # visible_objects_[:, :, [7, 8, 9]] = visible_objects_[:, :, [7, 9, 8]]
 
         # # oriented = torch.from_numpy(np.array(poses).astype(np.float32))
         # # oriented, transform_matrix = camera_utils.auto_orient_and_center_poses(
