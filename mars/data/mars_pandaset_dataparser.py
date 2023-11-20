@@ -141,7 +141,7 @@ def cuboid_in_which_camera(cuboid, camera_names:List[str], cameras:dict[str, pan
 
 
 
-def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selected_frames: List[int], transform_matrix:np.ndarray, camera_names:List[str], cameras:dict[str, pandaset.sensors.Camera], fn_coordinates_conversion: Optional[Callable[[np.ndarray], np.ndarray]]):
+def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selected_frames: List[int], transform_matrix:np.ndarray, camera_names:List[str], cameras:dict[str, pandaset.sensors.Camera], lidar:pandaset.sensors.Lidar, fn_coordinates_conversion: Optional[Callable[[np.ndarray], np.ndarray]]):
     """
     Extracts object pose information from the pandaset dataset for the specified frames.
     
@@ -212,22 +212,75 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
 
     start_frame = selected_frames[0]
     end_frame = selected_frames[1]
+    
+    class ObjectID:
+        def __init__(self, cuboids: pandaset.annotations.Cuboids, start_frame:int =0, end_frame:int =-1):
+            uuid_list = []
+            uuid_to_sibling_uuid = {}
+            cuboid_dimensions = {}
+            for frame_id in range(start_frame, end_frame + 1):
+                cuboids_frame = cuboids[frame_id]
+                for cuboid_idx in range(len(cuboids_frame)):
+                    cuboid = cuboids_frame.iloc[cuboid_idx]
+                    if cuboid['cuboids.sensor_id']!=-1:
+                        if cuboid['cuboids.sibling_id'] in uuid_list:
+                            uuid_to_sibling_uuid[cuboid['uuid']] = cuboid['cuboids.sibling_id']
+                        else:
+                            uuid_list.append(cuboid['uuid'])
+                            cuboid_dimensions[cuboid['uuid']] = (cuboid['dimensions.x'], cuboid['dimensions.y'], cuboid['dimensions.z'])
 
-    uuid_list = []
-    for frame_id in range(start_frame, end_frame + 1):
-        cuboids_frame = cuboids[frame_id]
-        uuid_list.extend(list(cuboids_frame['uuid']))
-    uuid_list = list(set(uuid_list))  
+                    else:
+                        uuid_list.append(cuboid['uuid'])
+                        cuboid_dimensions[cuboid['uuid']] = (cuboid['dimensions.x'], cuboid['dimensions.y'], cuboid['dimensions.z'])
+                #uuid_list.extend(list(cuboids_frame['uuid']))
+            self.uuid_list = list(set(uuid_list))  
+            self.uuid_to_sibling_uuid = uuid_to_sibling_uuid
+            self.cuboid_dimensions = cuboid_dimensions
 
-    def uuid_2_id(uuid:str)->int:
-        return uuid_list.index(uuid)
+        def get_dimension(self, uuid:str):
+            if uuid in self.uuid_to_sibling_uuid:
+                uuid = self.uuid_to_sibling_uuid[uuid]
+            return self.cuboid_dimensions[uuid]
 
-    def is_2_uuid(id:int)->str:
-        return uuid_list[id]
 
+        def uuid_2_id(self, uuid:str)->int:
+            if uuid in self.uuid_to_sibling_uuid:
+                uuid = self.uuid_to_sibling_uuid[uuid]
+            return self.uuid_list.index(uuid)
+
+        def id_2_uuid(self, id:int)->str:
+            return self.uuid_list[id]
+
+    object_ID = ObjectID(cuboids, start_frame, end_frame)
 
     def cam_2_idx(cam):
         return camera_names.index(cam)
+
+    
+    def get_lidar_ts_points_in_box(cuboid, lidar_pts):
+        yaw = cuboid['yaw']
+        x = cuboid['position.x']
+        y = cuboid['position.y']
+        z = cuboid['position.z']
+        length = float(cuboid['dimensions.x'])
+        width = float(cuboid['dimensions.y'])
+        height = float(cuboid['dimensions.z'])
+        
+        Tr_box = np.eye(4)
+        Tr_box[:3,3] = [x, y, z]
+        Tr_box[:3,:3] = transforms3d.euler.euler2mat(0,0,yaw)
+        Tr_box_inv = np.linalg.inv(Tr_box)
+
+        pts = np.vstack([lidar_pts['x'], lidar_pts['y'], lidar_pts['z'], np.ones_like(lidar_pts['x'])])
+        ts_lidar = np.array(lidar_pts['t'])
+        sensor_lidar = np.array(lidar_pts['d'])
+        
+        pts_inv = Tr_box_inv @ pts
+
+        mask = (pts_inv[0]<length/2) & (pts_inv[0]>-length/2) & (pts_inv[1]<width/2) & (pts_inv[1]>-width/2) & (pts_inv[2]<height/2) & (pts_inv[2]>-height/2) 
+        ts_lidar0 = ts_lidar[mask & (sensor_lidar==0)]
+        ts_lidar1 = ts_lidar[mask & (sensor_lidar==1)]
+        return np.mean(ts_lidar0), np.std(ts_lidar0), np.mean(ts_lidar1), np.std(ts_lidar1)
 
     # Total number of frames in the scene
     n_scene_frames =  end_frame - start_frame + 1
@@ -245,36 +298,61 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
             cuboid_in_which_cam = cuboid_in_which_camera(cuboid, camera_names, cameras, frame_id)
             if len(cuboid_in_which_cam)==0:
                 continue
+            ts_cameras = []
+            for cam_name in cuboid_in_which_cam:
+                ts_cameras.append(cameras[cam_name].timestamps[frame_id])
+            
+            
             #print(cuboid)
             if cuboid['label'] not in _sem2label_pandaset:
                 continue
             nb_obj += 1
             type = _sem2label_pandaset[cuboid['label']]
-            id = uuid_2_id(cuboid['uuid'])
+            id = object_ID.uuid_2_id(cuboid['uuid'])
 
+            length = float(cuboid['dimensions.x'])
+            width = float(cuboid['dimensions.y'])
+            height = float(cuboid['dimensions.z'])
+            
+            yaw = cuboid['yaw']
+            x = cuboid['position.x']
+            y = cuboid['position.y']
+            z = cuboid['position.z']
+            
+            
+            if cuboid['cuboids.sensor_id'] != -1: # if -1, not in camera FOV
+                ts_cameras_mean = np.mean(ts_cameras)
+                sibling_id = cuboid['cuboids.sibling_id']
+                # if '2c0e5cc9-eafd-4498-93ba-9898126219c3' in sibling_id or '1cc0dede-cc12-4e38-bf50-6777b54c8421' in sibling_id:
+                #     print(cuboid)
+                if len(cuboids_frame[cuboids_frame['uuid'] == sibling_id]) == 1:
+                        
+                    cuboids_sibling = cuboids_frame[cuboids_frame['uuid'] == sibling_id].iloc[0]
+                    ts_lidar0_mean, ts_lidar0_std, ts_lidar1_mean, ts_lidar1_std = get_lidar_ts_points_in_box(cuboid, lidar[frame_id])
+                    ts_lidar0_mean_sibling, ts_lidar0_std_sibling, ts_lidar1_mean_sibling, ts_lidar1_std_sibling = get_lidar_ts_points_in_box(cuboids_sibling, lidar[frame_id])
+                    ts_lidar_mean = [ts_lidar0_mean, ts_lidar1_mean]
+                    ts_lidar_mean_sibling = [ts_lidar0_mean_sibling, ts_lidar1_mean_sibling]
+
+                    
+                    if np.abs(ts_lidar_mean[cuboid['cuboids.sensor_id']]-ts_cameras_mean)>np.abs(ts_lidar_mean_sibling[1-cuboid['cuboids.sensor_id']]-ts_cameras_mean):
+                        continue # sibling cuboid TS s closer to camera TS
+ 
+                
             if not int(id) in objects_meta_kitti:
-                length = float(cuboid['dimensions.x'])
-                width = float(cuboid['dimensions.y'])
-                height = float(cuboid['dimensions.z'])
-                # length = float(tracklet[12])
-                # height = float(tracklet[10])
-                # width = float(tracklet[11])
+                length, width, height = object_ID.get_dimension(cuboid['uuid'])
                 objects_meta_kitti[int(id)] = np.array([float(id), type, length, height, width])
                 """
                 The first two elements (frame number and object ID) as float64.
                 The object type (converted from the semantic label) as a float.
                 The remaining elements of the tracklet (3D position, rotation, and dimensions) as float64.
                 """
-            yaw = cuboid['yaw']
-            x = cuboid['position.x']
-            y = cuboid['position.y']
-            z = cuboid['position.z']
+
             tr_array = np.concatenate(
                 [np.array([frame_id, id]).astype(np.float64), np.array([type]), np.array([x,y,z,yaw, length, height, width]).astype(np.float64)]
             )
             tracklets_ls.append(tr_array)
             cuboid_keeped.append(cuboid)
-            # pour choisir entre le cuboid du lidar o ou 1
+            # pour choisir entre le cuboid du lidar 0 ou 1
             # reprojeter les points qui tombe dans la boite, obtenir les timestamps des points lidar 0 et 1,
             # et trouver ceux qui sont le plus proche du ts de la camera 
         n_obj_in_frame[frame_id - start_frame] = nb_obj
@@ -910,7 +988,7 @@ class MarsPandasetParser(DataParser):
         # )
 
         # Get Object poses
-        visible_objects_, objects_meta_ = get_obj_pose_tracking_pandaset(seq.cuboids, self.selected_frames, np.eye(4), self.cameras_name_list, seq.camera, self.coordinates_conversion)
+        visible_objects_, objects_meta_ = get_obj_pose_tracking_pandaset(seq.cuboids, self.selected_frames, np.eye(4), self.cameras_name_list, seq.camera, seq.lidar, self.coordinates_conversion)
             
         # # Align Axis with vkitti axis
         #poses = np.matmul(kitti2vkitti, cam_poses_tracking).astype(np.float32)
