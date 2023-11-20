@@ -319,14 +319,14 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
             y = cuboid['position.y']
             z = cuboid['position.z']
             
-            
-            if cuboid['cuboids.sensor_id'] != -1: # if -1, not in camera FOV
+            # pandaset has 2 lidars, and provide to cuboid per object in order to manage timestamps differences.
+            # in this case, the cuboid has sibling_id field which will contain the cuboid uuid in the other lidar.
+            # to avoid object dupplication (latents), we will keep only one the thisese 2 cuboids, the one has the closeat ts to camera images TS mean
+            if cuboid['cuboids.sensor_id'] != -1: # if -1, seem to not be in camera FOV
                 ts_cameras_mean = np.mean(ts_cameras)
                 sibling_id = cuboid['cuboids.sibling_id']
-                # if '2c0e5cc9-eafd-4498-93ba-9898126219c3' in sibling_id or '1cc0dede-cc12-4e38-bf50-6777b54c8421' in sibling_id:
-                #     print(cuboid)
-                if len(cuboids_frame[cuboids_frame['uuid'] == sibling_id]) == 1:
-                        
+                
+                if len(cuboids_frame[cuboids_frame['uuid'] == sibling_id]) == 1:    
                     cuboids_sibling = cuboids_frame[cuboids_frame['uuid'] == sibling_id].iloc[0]
                     ts_lidar0_mean, ts_lidar0_std, ts_lidar1_mean, ts_lidar1_std = get_lidar_ts_points_in_box(cuboid, lidar[frame_id])
                     ts_lidar0_mean_sibling, ts_lidar0_std_sibling, ts_lidar1_mean_sibling, ts_lidar1_std_sibling = get_lidar_ts_points_in_box(cuboids_sibling, lidar[frame_id])
@@ -335,10 +335,11 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
 
                     
                     if np.abs(ts_lidar_mean[cuboid['cuboids.sensor_id']]-ts_cameras_mean)>np.abs(ts_lidar_mean_sibling[1-cuboid['cuboids.sensor_id']]-ts_cameras_mean):
-                        continue # sibling cuboid TS s closer to camera TS
+                        continue # sibling cuboid TS s closer to camera TS, so forget this one
  
                 
             if not int(id) in objects_meta_kitti:
+                # object and sibling object don't have extacly the same dimension, we will only one object and merge the 2 uuid in "kitti like id"
                 length, width, height = object_ID.get_dimension(cuboid['uuid'])
                 objects_meta_kitti[int(id)] = np.array([float(id), type, length, height, width])
                 """
@@ -352,9 +353,7 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
             )
             tracklets_ls.append(tr_array)
             cuboid_keeped.append(cuboid)
-            # pour choisir entre le cuboid du lidar 0 ou 1
-            # reprojeter les points qui tombe dans la boite, obtenir les timestamps des points lidar 0 et 1,
-            # et trouver ceux qui sont le plus proche du ts de la camera 
+
         n_obj_in_frame[frame_id - start_frame] = nb_obj
 
         
