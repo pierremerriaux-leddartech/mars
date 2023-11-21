@@ -317,7 +317,7 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
             yaw = cuboid['yaw']
             x = cuboid['position.x']
             y = cuboid['position.y']
-            z = cuboid['position.z']
+            z = cuboid['position.z'] - height/2 # to compatible with kitti format (cuboid position set to bottom center)
             
             # pandaset has 2 lidars, and provide to cuboid per object in order to manage timestamps differences.
             # in this case, the cuboid has sibling_id field which will contain the cuboid uuid in the other lidar.
