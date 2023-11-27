@@ -24,7 +24,7 @@ from nerfstudio.plugins.types import MethodSpecification
 
 MAX_NUM_ITERATIONS = 600000
 STEPS_PER_SAVE = 2000
-STEPS_PER_EVAL_IMAGE = 500
+STEPS_PER_EVAL_IMAGE = 500#500 Pierre modif
 STEPS_PER_EVAL_ALL_IMAGES = 5000
 
 VKITTI_Recon_Mars_Car_Depth_Semantic = MethodSpecification(
@@ -163,7 +163,7 @@ PANDASET_Recon_Mars_Car_Depth = MethodSpecification(
                     ),
                     split_setting="reconstruction",
                     car_nerf_state_dict_path=Path("/DATA_EDS/liuty/ckpts/pretrain/car_nerf/epoch_670.ckpt"),
-                    scale_factor=1.0 #0.1,
+                    scale_factor=0.1 #0.1,
                 ),
                 train_num_rays_per_batch=4096,
                 eval_num_rays_per_batch=4096,

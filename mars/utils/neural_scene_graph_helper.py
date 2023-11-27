@@ -435,7 +435,7 @@ def rotate_yaw(p, yaw):
     if len(p.shape) < 4:
         # p = p[..., tf.newaxis, :]
         p = p.unsqueeze(-2)
-
+    #yaw += np.deg2rad(-90.0) # hack Pierre, je comprends pas encore pourquoi
     c_y = torch.cos(yaw)
     s_y = torch.sin(yaw)
 
@@ -446,9 +446,14 @@ def rotate_yaw(p, yaw):
     # c_y = tf.cos(yaw)[..., tf.newaxis]
     # s_y = tf.sin(yaw)[..., tf.newaxis]
 
-    p_x = c_y * p[..., 0] - s_y * p[..., 2]
-    p_y = p[..., 1]
-    p_z = s_y * p[..., 0] + c_y * p[..., 2]
+    # modif Pierre
+    # p_x = c_y * p[..., 0] - s_y * p[..., 2]
+    # p_y = p[..., 1]
+    # p_z = s_y * p[..., 0] + c_y * p[..., 2]
+    
+    p_x = c_y * p[..., 0] - s_y * p[..., 1]
+    p_y = s_y * p[..., 0] + c_y * p[..., 1]
+    p_z = p[..., 2]
 
     # return tf.concat([p_x[..., tf.newaxis], p_y[..., tf.newaxis], p_z[..., tf.newaxis]], axis=-1)
     return torch.cat([p_x.unsqueeze(-1), p_y.unsqueeze(-1), p_z.unsqueeze(-1)], dim=-1)
@@ -466,7 +471,7 @@ def scale_frames(p, sc_factor, inverse=False):
         p_scaled: Points given in N_frames rescaled frames [N_points, N_frames, N_samples, 3]
     """
     # Take 150% of bbox to include shadows etc.
-    dim = torch.tensor([1.0, 1.0, 1.0]).to(sc_factor.device) * sc_factor
+    dim = torch.tensor([1.0, 1.0, 1.0]).to(sc_factor.device) * sc_factor[...,[2,0,1]]#[1,0,2]]
     # dim = tf.constant([0.1, 0.1, 0.1]) * sc_factor
 
     half_dim = dim / 2
@@ -520,17 +525,23 @@ def world2object(pts, dirs, pose, theta_y, dim=None, inverse=False):
         #     dirs = tf.repeat(dirs, n_sample_per_ray, axis=0)
 
         pts = torch.tensor.reshape(pts, [-1, 3])
-
+    # modif Pierre
+    # # Shift the object reference point to the middle of the bbox (vkitti2 specific)
+    # y_shift = (
+    #     torch.tensor([0.0, -1.0, 0.0]).unsqueeze(0)
+    #     if inverse
+    #     else torch.tensor([0.0, -1.0, 0.0]).unsqueeze(0).unsqueeze(0)
+    # ).to(dim.device) * (dim[..., 1] / 2).unsqueeze(-1)
     # Shift the object reference point to the middle of the bbox (vkitti2 specific)
-    y_shift = (
-        torch.tensor([0.0, -1.0, 0.0]).unsqueeze(0)
+    z_shift = (
+        torch.tensor([0.0, -0.0, 1.0]).unsqueeze(0)
         if inverse
-        else torch.tensor([0.0, -1.0, 0.0]).unsqueeze(0).unsqueeze(0)
+        else torch.tensor([0.0, 0.0, 1.0]).unsqueeze(0).unsqueeze(0)
     ).to(dim.device) * (dim[..., 1] / 2).unsqueeze(-1)
     # y_shift = (tf.constant([0., -1., 0.])[tf.newaxis, :] if inverse else
     #            tf.constant([0., -1., 0.])[tf.newaxis, tf.newaxis, :]) * \
     #           (dim[..., 1] / 2)[..., tf.newaxis]
-    pose_w = pose + y_shift
+    pose_w = pose + z_shift
 
     # Describes the origin of the world system w in the object system o
     t_w_o = rotate_yaw(-pose_w, theta_y)
@@ -617,10 +628,17 @@ def object2world(pts, dirs, pose, theta_y, dim=None, inverse=True):
 
         pts = torch.reshape(pts, [-1, 3])
 
+    # modif Pierre
+    # # Shift the object reference point to the middle of the bbox (vkitti2 specific)
+    # y_shift = torch.tensor([0.0, -1.0, 0.0]).unsqueeze(0).to(dim.device) * (dim[..., 1] / 2).unsqueeze(-1)
+    # # y_shift = tf.constant([0., -1., 0.])[tf.newaxis, :] * (dim[..., 1] / 2)[..., tf.newaxis]
+    # pose_w = pose + y_shift
+    
+
     # Shift the object reference point to the middle of the bbox (vkitti2 specific)
-    y_shift = torch.tensor([0.0, -1.0, 0.0]).unsqueeze(0).to(dim.device) * (dim[..., 1] / 2).unsqueeze(-1)
+    z_shift = torch.tensor([0.0, 0.0, 1.0]).unsqueeze(0).to(dim.device) * (dim[..., 1] / 2).unsqueeze(-1)
     # y_shift = tf.constant([0., -1., 0.])[tf.newaxis, :] * (dim[..., 1] / 2)[..., tf.newaxis]
-    pose_w = pose + y_shift
+    pose_w = pose + z_shift
 
     # Describes the origin of the world system w in the object system o
     t_w_o = rotate_yaw(-pose_w, theta_y)

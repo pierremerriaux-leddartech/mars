@@ -65,14 +65,14 @@ def invert_transformation(rot, t):
 
 
 def cuboid_to_3d_points(cuboid):
-    yaw = cuboid['yaw']
+    yaw = cuboid['yaw'] + np.deg2rad(90.0)
     x = cuboid['position.x']
     y = cuboid['position.y']
     z = cuboid['position.z']
     translation = np.array([[x, y, z]]).T
 
-    dimension_x = cuboid['dimensions.x']
-    dimension_y = cuboid['dimensions.y']
+    dimension_y = cuboid['dimensions.x']
+    dimension_x = cuboid['dimensions.y']
     dimension_z = cuboid['dimensions.z']
 
     Tr = transforms3d.euler.euler2mat(0, 0, yaw)
@@ -227,11 +227,11 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
                             uuid_to_sibling_uuid[cuboid['uuid']] = cuboid['cuboids.sibling_id']
                         else:
                             uuid_list.append(cuboid['uuid'])
-                            cuboid_dimensions[cuboid['uuid']] = (cuboid['dimensions.x'], cuboid['dimensions.y'], cuboid['dimensions.z'])
+                            cuboid_dimensions[cuboid['uuid']] = (cuboid['dimensions.y'], cuboid['dimensions.x'], cuboid['dimensions.z'])
 
                     else:
                         uuid_list.append(cuboid['uuid'])
-                        cuboid_dimensions[cuboid['uuid']] = (cuboid['dimensions.x'], cuboid['dimensions.y'], cuboid['dimensions.z'])
+                        cuboid_dimensions[cuboid['uuid']] = (cuboid['dimensions.y'], cuboid['dimensions.x'], cuboid['dimensions.z'])
                 #uuid_list.extend(list(cuboids_frame['uuid']))
             self.uuid_list = list(set(uuid_list))  
             self.uuid_to_sibling_uuid = uuid_to_sibling_uuid
@@ -258,12 +258,12 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
 
     
     def get_lidar_ts_points_in_box(cuboid, lidar_pts):
-        yaw = cuboid['yaw']
+        yaw = cuboid['yaw'] + np.deg2rad(90.0)
         x = cuboid['position.x']
         y = cuboid['position.y']
         z = cuboid['position.z']
-        length = float(cuboid['dimensions.x'])
-        width = float(cuboid['dimensions.y'])
+        length = float(cuboid['dimensions.y'])
+        width = float(cuboid['dimensions.x'])
         height = float(cuboid['dimensions.z'])
         
         Tr_box = np.eye(4)
@@ -310,11 +310,11 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
             type = _sem2label_pandaset[cuboid['label']]
             id = object_ID.uuid_2_id(cuboid['uuid'])
 
-            length = float(cuboid['dimensions.x'])
-            width = float(cuboid['dimensions.y'])
+            length = float(cuboid['dimensions.y'])
+            width = float(cuboid['dimensions.x'])
             height = float(cuboid['dimensions.z'])
             
-            yaw = cuboid['yaw']
+            yaw = cuboid['yaw'] + np.deg2rad(90.0)
             x = cuboid['position.x']
             y = cuboid['position.y']
             z = cuboid['position.z'] - height/2 # to compatible with kitti format (cuboid position set to bottom center)

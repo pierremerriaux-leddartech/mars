@@ -103,7 +103,7 @@
         "--pipeline.datamanager.dataparser.car-nerf-state-dict-path",
         "/home/pierre.merriaux/data/mars-nerf/latents/KITTI-MOT/car-nerf-state-dict/epoch_670.ckpt",
         "--vis",
-        "viewer"
+        "viewer+tensorboard"
       ]
     },
     {
@@ -120,11 +120,12 @@
         "/home/pierre.merriaux/data/pandaset",
         "--viewer.websocket-port=7008",
         "--pipeline.datamanager.dataparser.car-object-latents-path",
-        "/home/pierre.merriaux/data/mars-nerf/latents/latent_codes_car_van_truck.pt",
+        //"/home/pierre.merriaux/data/mars-nerf/latents/latent_codes_car_van_truck.pt",
+        "/home/pierre.merriaux/project/mars-refact/mars/pandaset_init_seq109.pt",
         "--pipeline.datamanager.dataparser.car-nerf-state-dict-path",
         "/home/pierre.merriaux/data/mars-nerf/latents/KITTI-MOT/car-nerf-state-dict/epoch_670.ckpt",
         "--vis",
-        "viewer"
+        "viewer+tensorboard"
       ]
     },
     {
