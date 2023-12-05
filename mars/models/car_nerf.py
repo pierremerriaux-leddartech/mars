@@ -50,7 +50,7 @@ class CarNeRFModelConfig(ModelConfig):
     num_coarse_samples: int = 32
     num_fine_samples: int = 97
     background_color: str = "black"
-    optimize_latents: bool = False
+    optimize_latents: bool = True
 
 
 class CarNeRF(Model):
@@ -77,6 +77,7 @@ class CarNeRF(Model):
             self.car_latents[idx] = nn.Parameter(
                 self.car_latents[idx], requires_grad=self.training and self.config.optimize_latents
             )
+        #self.car_latents = nn.ModuleDict(self.car_latents)
 
         self.fields = CarNeRF_Field()
         if "car_nerf_state_dict_path" in self.kwargs:

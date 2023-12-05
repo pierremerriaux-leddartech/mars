@@ -115,17 +115,35 @@
       "args": [
         "mars-pandaset-car-depth-recon",
         "--experiment_name",
-        "Mars_pandaset-048-pierre",
+        "Mars_pandaset-011-pierre",
         "--data",
         "/home/pierre.merriaux/data/pandaset",
         "--viewer.websocket-port=7008",
         "--pipeline.datamanager.dataparser.car-object-latents-path",
         //"/home/pierre.merriaux/data/mars-nerf/latents/latent_codes_car_van_truck.pt",
-        "/home/pierre.merriaux/project/mars-refact/mars/pandaset_init_seq109.pt",
+        "/home/pierre.merriaux/project/mars-refact/mars/pandaset_init_seq011_higher_frame.pt",
         "--pipeline.datamanager.dataparser.car-nerf-state-dict-path",
         "/home/pierre.merriaux/data/mars-nerf/latents/KITTI-MOT/car-nerf-state-dict/epoch_670.ckpt",
+        "--pipeline.datamanager.dataparser.scale-factor",
+        "0.01",
+        //"--load-dir",
+        //"/home/pierre.merriaux/project/mars-refact/mars/outputs/Mars_pandaset-011-pierre/mars-pandaset-car-depth-recon/2023-11-29_211620/nerfstudio_models/",
         "--vis",
         "viewer+tensorboard"
+      ]
+    },
+    {
+      "name": "PANDASET_Render_pierre",
+      "type": "python",
+      "request": "launch",
+      "program": "scripts/cicai_render.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--load-config",
+        //"/home/pierre.merriaux/project/mars-refact/mars/outputs/Mars_pandaset-011-pierre/mars-pandaset-car-depth-recon/2023-12-04_211630/config.yml", //scale 0.01
+        "/home/pierre.merriaux/project/mars-refact/mars/outputs/Mars_pandaset-011-pierre/mars-pandaset-car-depth-recon/2023-11-30_195743/config.yml", //scale 0.03
+        "--output-format",
+        "images",
       ]
     },
     {

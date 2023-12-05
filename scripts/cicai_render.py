@@ -120,6 +120,8 @@ def _render_trajectory_video(
                 camera_ray_bundle = cameras.generate_rays(camera_indices=camera_idx)
                 camera_ray_bundle.metadata["object_rays_info"] = objdata
 
+                print(f'camera_ray_bundle {camera_ray_bundle}')
+
                 # camera_ray_bundle.metadata["object_rays_metadata"] = obj_metadata
                 # camera_ray_bundle = cameras.generate_rays(
                 #     camera_indices=camera_idx,
@@ -147,8 +149,9 @@ def _render_trajectory_video(
                 )
                 pose = batch_obj_dyn[..., :3]
                 rotation = batch_obj_dyn[..., 3]
-                pose[:, :, 0, 2] = pose[:, :, 0, 2]
-                rotation[:, :, 0] = rotation[:, :, 0]
+                #pose[:, :, 0, 2] = pose[:, :, 0, 2]
+                pose[:, :, :, 0:2] = pose[:, :, :, 0:2]
+                rotation[:, :, 0] = rotation[:, :, 0] #+ 3.14159/8
                 batch_obj_dyn[..., :3] = pose
                 batch_obj_dyn[..., 3] = rotation
                 camera_ray_bundle.metadata["object_rays_info"] = batch_obj_dyn.reshape(
@@ -161,6 +164,7 @@ def _render_trajectory_video(
 
                 with torch.no_grad():
                     outputs = pipeline.model.get_outputs_for_camera_ray_bundle_render(camera_ray_bundle)
+                    print(outputs.keys())
                 render_image = []
                 for rendered_output_name in rendered_output_names:
                     if rendered_output_name not in outputs:
@@ -295,7 +299,7 @@ class RenderTrajectory:
     # Path to config YAML file.
     load_config: Path
     # Name of the renderer outputs to use. rgb, depth, semantics etc. concatenates them along y axis
-    rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
+    rendered_output_names: List[str] = field(default_factory=lambda: ["rgb", "objects_rgb", "background" ])
     #  Trajectory to render.
     traj: Literal["spiral", "filename"] = "spiral"
     # Scaling factor to apply to the camera image resolution.

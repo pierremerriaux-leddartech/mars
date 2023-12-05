@@ -436,8 +436,8 @@ def rotate_yaw(p, yaw):
         # p = p[..., tf.newaxis, :]
         p = p.unsqueeze(-2)
     #yaw += np.deg2rad(-90.0) # hack Pierre, je comprends pas encore pourquoi
-    c_y = torch.cos(yaw)
-    s_y = torch.sin(yaw)
+    c_y = torch.cos(-yaw)
+    s_y = torch.sin(-yaw)
 
     if len(c_y.shape) < 3:
         c_y = c_y.unsqueeze(-1)
@@ -471,7 +471,7 @@ def scale_frames(p, sc_factor, inverse=False):
         p_scaled: Points given in N_frames rescaled frames [N_points, N_frames, N_samples, 3]
     """
     # Take 150% of bbox to include shadows etc.
-    dim = torch.tensor([1.0, 1.0, 1.0]).to(sc_factor.device) * sc_factor[...,[2,0,1]]#[1,0,2]]
+    dim = torch.tensor([1.0, 1.0, 1.0]).to(sc_factor.device) * sc_factor[...,[0, 2, 1]] #[2,0,1]]#[1,0,2]]
     # dim = tf.constant([0.1, 0.1, 0.1]) * sc_factor
 
     half_dim = dim / 2

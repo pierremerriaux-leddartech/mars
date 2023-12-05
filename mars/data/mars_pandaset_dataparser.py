@@ -706,7 +706,7 @@ class MarsPandasetDataParserConfig(DataParserConfig):
     """target class to instantiate"""
     data: Path = Path("data/pandaset")
     """Directory specifying location of data."""
-    scale_factor: float = 1
+    scale_factor: float = .01
     """How much to scale the camera origins by."""
     scene_scale: float = 1.0
     """How much to scale the region of interest by."""
@@ -735,7 +735,7 @@ class MarsPandasetDataParserConfig(DataParserConfig):
     """specifies the distance from the last pose to the far plane"""
     dataset_type: str = "pandaset"
 
-    seq_name: str = '109'
+    seq_name: str = '011'
     """pandaset sequence name in data folder"""
     cameras_name_list: List[str] = field(default_factory=lambda: ['front_camera'])
     """pandaset camera names to process, possible values are: 'front_camera', 'front_left_camera', 'front_right_camera', 'left_camera', 'right_camera'"""
@@ -748,10 +748,10 @@ class MarsPandasetDataParserConfig(DataParserConfig):
     max_input_objects: int = -1
     """Max number of object poses considered by the network, will be set automatically"""
     add_input_rows: int = -1
-    use_car_latents: bool = False
-    car_object_latents_path: Optional[Path] = Path("pretrain/car_nerf/latent_codes.pt")
+    use_car_latents: bool = True
+    car_object_latents_path: Optional[Path] = Path("/home/pierre.merriaux/project/mars-refact/mars/pandaset_init_seq109.pt")
     """path of car object latent codes"""
-    car_nerf_state_dict_path: Optional[Path] = Path("pretrain/car_nerf/car_nerf.ckpt")
+    car_nerf_state_dict_path: Optional[Path] = Path("/home/pierre.merriaux/data/mars-nerf/latents/KITTI-MOT/car-nerf-state-dict/epoch_670.ckpt")
     """path of car nerf state dicts"""
     use_depth: bool = True
     """whether the training loop contains depth"""
@@ -868,7 +868,7 @@ class MarsPandasetParser(DataParser):
                 cx.append(camera.intrinsics.cx)
                 cy.append(camera.intrinsics.cy)
                 camera_type.append(CameraType.PERSPECTIVE)
-                pose = camera.poses[frame_idx]
+                pose = camera.poses[frame_idx + self.selected_frames[0]]
                 Tr = pose_to_Tr(pose)
                 # c2w = Tr.copy()
                 # flip_mat = np.array([
@@ -1039,7 +1039,8 @@ class MarsPandasetParser(DataParser):
 
         counts = np.arange(len(image_filenames))
         i_test = np.array([(idx + 1) % 4 == 0 for idx in counts])
-        
+        #i_test = np.array([(idx + 1) % 1 == 0 for idx in counts]) # test pierre, full eval set
+
         if self.config.split_setting == "reconstruction":
             i_train = np.ones(len(image_filenames), dtype=bool)
         elif self.config.split_setting == "nvs-75":
