@@ -233,7 +233,7 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
                         uuid_list.append(cuboid['uuid'])
                         cuboid_dimensions[cuboid['uuid']] = (cuboid['dimensions.y'], cuboid['dimensions.x'], cuboid['dimensions.z'])
                 #uuid_list.extend(list(cuboids_frame['uuid']))
-            self.uuid_list = list(set(uuid_list))  
+            self.uuid_list = sorted(list(set(uuid_list)))
             self.uuid_to_sibling_uuid = uuid_to_sibling_uuid
             self.cuboid_dimensions = cuboid_dimensions
 
