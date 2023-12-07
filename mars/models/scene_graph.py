@@ -100,7 +100,7 @@ class SceneGraphModelConfig(ModelConfig):
     """Whether to predict normals or not."""
     object_representation: Literal["class-wise", "object-wise"] = "object-wise"
     """Whether to use a single representation for all objects of a class or a different one for each object."""
-    object_ray_sample_strategy: Literal["warmup", "remove-bg", "none"] = "remove-bg"
+    object_ray_sample_strategy: Literal["warmup", "remove-bg", "none"] = "warmup"
     object_warmup_steps: int = 1000
     """Number of steps to warm up the object models, before starting to train the background networks in the intersection region."""
     depth_loss_mult: float = 1e-2
@@ -273,6 +273,10 @@ class SceneGraphModel(Model):
 
         def steps_callback(step):
             self.step = step
+            if  self.step > self.config.object_warmup_steps:
+                self.config.object_ray_sample_strategy = 'remove-bg'
+                print('warmup finished')
+            # if warmup ended, go remove_bg 5k iteration
 
         callbacks.append(
             TrainingCallback(
