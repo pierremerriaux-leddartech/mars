@@ -306,7 +306,7 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
             #print(cuboid)
             if cuboid['label'] not in _sem2label_pandaset:
                 continue
-            nb_obj += 1
+            
             type = _sem2label_pandaset[cuboid['label']]
             id = object_ID.uuid_2_id(cuboid['uuid'])
 
@@ -321,7 +321,7 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
             
             # pandaset has 2 lidars, and provide to cuboid per object in order to manage timestamps differences.
             # in this case, the cuboid has sibling_id field which will contain the cuboid uuid in the other lidar.
-            # to avoid object dupplication (latents), we will keep only one the thisese 2 cuboids, the one has the closeat ts to camera images TS mean
+            # to avoid object dupplication (latents), we will keep only one the these 2 cuboids, the one has the closest ts to camera images TS mean
             if cuboid['cuboids.sensor_id'] != -1: # if -1, seem to not be in camera FOV
                 ts_cameras_mean = np.mean(ts_cameras)
                 sibling_id = cuboid['cuboids.sibling_id']
@@ -353,7 +353,7 @@ def get_obj_pose_tracking_pandaset(cuboids: pandaset.annotations.Cuboids , selec
             )
             tracklets_ls.append(tr_array)
             cuboid_keeped.append(cuboid)
-
+            nb_obj += 1
         n_obj_in_frame[frame_id - start_frame] = nb_obj
 
         
