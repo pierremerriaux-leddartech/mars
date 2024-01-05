@@ -21,6 +21,7 @@ from nerfstudio.engine.optimizers import RAdamOptimizerConfig
 from nerfstudio.engine.schedulers import ExponentialDecaySchedulerConfig
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.plugins.types import MethodSpecification
+from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConfig
 
 MAX_NUM_ITERATIONS = 600000
 STEPS_PER_SAVE = 2000 # 2000 modif Pierre
@@ -167,13 +168,13 @@ PANDASET_Recon_Mars_Car_Depth = MethodSpecification(
                 ),
                 train_num_rays_per_batch=4096,
                 eval_num_rays_per_batch=4096,
-                camera_optimizer=CameraOptimizerConfig(mode="off"),
+                camera_optimizer=CameraOptimizerConfig(mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)),
             ),
             model=SceneGraphModelConfig(
                 background_model=NerfactoModelConfig(),
                 object_model_template=CarNeRFModelConfig(_target=CarNeRF),
                 object_representation="class-wise",
-                object_ray_sample_strategy="warmup", #"remove-bg", # Pierre test
+                object_ray_sample_strategy="warmup", # "warmup", #"remove-bg", # Pierre test
                 mono_depth_loss_mult=0.01,
                 depth_loss_mult=0,
             ),

@@ -101,7 +101,7 @@ class SceneGraphModelConfig(ModelConfig):
     object_representation: Literal["class-wise", "object-wise"] = "object-wise"
     """Whether to use a single representation for all objects of a class or a different one for each object."""
     object_ray_sample_strategy: Literal["warmup", "remove-bg", "none"] = "warmup"
-    object_warmup_steps: int = 1000
+    object_warmup_steps: int = 2500
     """Number of steps to warm up the object models, before starting to train the background networks in the intersection region."""
     depth_loss_mult: float = 1e-2
     """depth loss multiplier"""
@@ -401,6 +401,7 @@ class SceneGraphModel(Model):
             # (n_rays, n_samples)
 
             output_bg_insec_density = output_bg_density[intersection_map[..., 0]]  # (n_intersects, n_samples)
+            #print(z_vals_in_w, z_vals_out_w)
             mask = (bg_samples_z_vals > z_vals_in_w.unsqueeze(-1)) & (bg_samples_z_vals < z_vals_out_w.unsqueeze(-1))
             output_bg_insec_density[mask] = 0.0
 

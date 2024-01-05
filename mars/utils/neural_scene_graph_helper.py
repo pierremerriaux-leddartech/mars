@@ -436,7 +436,7 @@ def rotate_yaw(p, yaw):
         # p = p[..., tf.newaxis, :]
         p = p.unsqueeze(-2)
     #yaw += np.deg2rad(-90.0) # hack Pierre, je comprends pas encore pourquoi
-    c_y = torch.cos(-yaw)
+    c_y = torch.cos(-yaw) # Pierre TODO pas sur du signe moins, faudrait verifier ca.
     s_y = torch.sin(-yaw)
 
     if len(c_y.shape) < 3:

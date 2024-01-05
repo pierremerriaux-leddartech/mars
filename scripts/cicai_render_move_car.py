@@ -107,115 +107,140 @@ def _render_trajectory_video(
             if output_format == "video"
             else None
         )
+        NB_FRAME_TO_GENERATE = 25
         with progress:
-            for camera_idx in progress.track(range(cameras.size), description=""):
-                # objdata = pipeline.datamanager.train_dataset.metadata["obj_info"][camera_idx].to(pipeline.device)
-                objdata = pipeline.datamanager.train_dataset.metadata["obj_info"][camera_idx].to(
-                    pipeline.model.object_meta["obj_metadata"].device
-                )
-                # obj_metadata = pipeline.datamanager.eval_dataset.metadata["obj_metadata"].to(pipeline.device)
-                obj_metadata = pipeline.datamanager.eval_dataset.metadata["obj_metadata"].to(
-                    pipeline.model.object_meta["obj_metadata"].device
-                )
-                camera_ray_bundle = cameras.generate_rays(camera_indices=camera_idx)
-                camera_ray_bundle.metadata["object_rays_info"] = objdata
+            for frame_generated in progress.track(range(NB_FRAME_TO_GENERATE)):
+                for camera_idx in [13]: #progress.track(range(cameras.size), description=""):
+                    # objdata = pipeline.datamanager.train_dataset.metadata["obj_info"][camera_idx].to(pipeline.device)
+                    objdata = pipeline.datamanager.train_dataset.metadata["obj_info"][camera_idx].to(
+                        pipeline.model.object_meta["obj_metadata"].device
+                    )
+                    objdata2 = pipeline.datamanager.train_dataset.metadata["obj_info"][camera_idx+frame_generated].to(
+                        pipeline.model.object_meta["obj_metadata"].device
+                    )
+                    # obj_metadata = pipeline.datamanager.eval_dataset.metadata["obj_metadata"].to(pipeline.device)
+                    obj_metadata = pipeline.datamanager.eval_dataset.metadata["obj_metadata"].to(
+                        pipeline.model.object_meta["obj_metadata"].device
+                    )
 
-                #print(f'camera_ray_bundle {camera_ray_bundle}')
+                    offset = -0.025*frame_generated/NB_FRAME_TO_GENERATE 
+                    tr_camera = np.eye(4,4, dtype=np.float32)[:3,:]
+                    tr_camera[:2,3] +=  [offset, offset/2]
+                    
+                    camera_opt_to_camera = torch.tensor(np.tile(tr_camera, (1080,1920,1,1))).to('cuda:0')
+                    #print(f'device {pipeline.model.object_meta["obj_metadata"].device}, {camera_opt_to_camera} {camera_opt_to_camera}.')
+                    camera_ray_bundle = cameras.generate_rays(camera_indices=camera_idx, camera_opt_to_camera=camera_opt_to_camera) # here to move camera.
+                    camera_ray_bundle.metadata["object_rays_info"] = objdata
 
-                # camera_ray_bundle.metadata["object_rays_metadata"] = obj_metadata
-                # camera_ray_bundle = cameras.generate_rays(
-                #     camera_indices=camera_idx,
-                #     keep_shape=True,
-                #     objdata=objdata,
-                #     objmetadata=obj_metadata,
-                # )
+                    #print(f'camera_ray_bundle {camera_ray_bundle}')
 
-                # batch_obj_rays = camera_ray_bundle.metadata["object_rays_info"].reshape(
-                #     camera_ray_bundle.metadata["object_rays_info"].shape[0],
-                #     camera_ray_bundle.metadata["object_rays_info"].shape[1],
-                #     int(camera_ray_bundle.metadata["object_rays_info"].shape[2] / 3),
-                #     3,
-                # )
+                    # camera_ray_bundle.metadata["object_rays_metadata"] = obj_metadata
+                    # camera_ray_bundle = cameras.generate_rays(
+                    #     camera_indices=camera_idx,
+                    #     keep_shape=True,
+                    #     objdata=objdata,
+                    #     objmetadata=obj_metadata,
+                    # )
 
-                batch_obj_dyn = camera_ray_bundle.metadata["object_rays_info"].view(
-                    camera_ray_bundle.metadata["object_rays_info"].shape[0],
-                    camera_ray_bundle.metadata["object_rays_info"].shape[1],
-                    pipeline.model.config.max_num_obj,
-                    pipeline.model.config.ray_add_input_rows * 3,
-                )
-                norm_sh = camera_ray_bundle.metadata["directions_norm"].shape
-                camera_ray_bundle.metadata["directions_norm"] = camera_ray_bundle.metadata["directions_norm"].reshape(
-                    norm_sh[0] * norm_sh[1], norm_sh[2]
-                )
-                pose = batch_obj_dyn[..., :3]
-                rotation = batch_obj_dyn[..., 3]
-                #pose[:, :, :, :3] = pose[:, :, :, :3] - torch.tensor([0.025 , 0.0, 0.0])
-                #pose[:, :, :, 0:2] = pose[:, :, :, 0:2]
-                #rotation[:, :, 0] = rotation[:, :, 0] #+ 3.14159/8
-                batch_obj_dyn[..., :3] = pose
-                batch_obj_dyn[..., 3] = rotation
-                camera_ray_bundle.metadata["object_rays_info"] = batch_obj_dyn.reshape(
-                    batch_obj_dyn.shape[0] * batch_obj_dyn.shape[1], batch_obj_dyn.shape[2] * batch_obj_dyn.shape[3]
-                )
-                # meta_sh = camera_ray_bundle.metadata["object_rays_metadata"].shape
-                # camera_ray_bundle.metadata["object_rays_metadata"] = camera_ray_bundle.metadata[
-                #     "object_rays_metadata"
-                # ].reshape(meta_sh[0] * meta_sh[1], meta_sh[2])
+                    # batch_obj_rays = camera_ray_bundle.metadata["object_rays_info"].reshape(
+                    #     camera_ray_bundle.metadata["object_rays_info"].shape[0],
+                    #     camera_ray_bundle.metadata["object_rays_info"].shape[1],
+                    #     int(camera_ray_bundle.metadata["object_rays_info"].shape[2] / 3),
+                    #     3,
+                    # )
+                    batch_obj_dyn_2 = torch.clone(objdata2.view(
+                        objdata2.shape[0],
+                        objdata2.shape[1],
+                        pipeline.model.config.max_num_obj,
+                        pipeline.model.config.ray_add_input_rows * 3,
+                    ))
 
-                with torch.no_grad():
-                    outputs = pipeline.model.get_outputs_for_camera_ray_bundle_render(camera_ray_bundle)
-                    print(outputs.keys())
-                render_image = []
-                for rendered_output_name in rendered_output_names:
-                    if rendered_output_name not in outputs:
-                        CONSOLE.rule("Error", style="red")
-                        CONSOLE.print(f"Could not find {rendered_output_name} in the model outputs", justify="center")
-                        CONSOLE.print(
-                            f"Please set --rendered_output_name to one of: {outputs.keys()}", justify="center"
-                        )
-                        sys.exit(1)
-                    if rendered_output_name == "depth":
-                        depth = outputs["depth"]
+                    batch_obj_dyn = torch.clone(camera_ray_bundle.metadata["object_rays_info"].view(
+                        camera_ray_bundle.metadata["object_rays_info"].shape[0],
+                        camera_ray_bundle.metadata["object_rays_info"].shape[1],
+                        pipeline.model.config.max_num_obj,
+                        pipeline.model.config.ray_add_input_rows * 3,
+                    ))
+                    norm_sh = camera_ray_bundle.metadata["directions_norm"].shape
+                    camera_ray_bundle.metadata["directions_norm"] = camera_ray_bundle.metadata["directions_norm"].reshape(
+                        norm_sh[0] * norm_sh[1], norm_sh[2]
+                    )
+                    pose = batch_obj_dyn[..., :3]
+                    rotation = batch_obj_dyn[..., 3]
+                    pose2 = batch_obj_dyn_2[..., :3]
+                    rotation2 = batch_obj_dyn_2[..., 3]
+                    offset = - torch.tensor([0.05*frame_generated/NB_FRAME_TO_GENERATE, 0.0, 0.0]) + torch.tensor([0.025, 0.0, 0.0])
+                    print(f'{pose[0, 0, 6, :3]} + {offset}')
+                    pose2[:, :, 6, :3] = pose[:, :, 6, :3] + offset
+                    print(f'results:{pose[0, 0, 6, :3]}')
+                    #pose[:, :, :, 0:2] = pose[:, :, :, 0:2]
+                    rotation2[:, :, 6] = rotation[:, :, 6] + 3.14159/3 * frame_generated/NB_FRAME_TO_GENERATE - 3.14159/8 
 
-                        filepath = pipeline.datamanager.train_dataparser_outputs.metadata["depth_filenames"][camera_idx]
-                        scale_factor = pipeline.datamanager.train_dataparser_outputs.dataparser_scale * 0.01
-                        depth_img_gt = get_depth_image_from_path(
-                            filepath=filepath, height=render_height, width=render_width, scale_factor=scale_factor
-                        )
-                        depth_mask = torch.abs(depth_img_gt / scale_factor - 65535) > 1e-6
-                        depth_gt = depth_img_gt.to(depth)
-                        depth_gt = depth_gt * outputs["directions_norm"]
-                        depth[~depth_mask] = 0.0
-                        max_depth = depth_img_gt.max()
-                        if pipeline.config.model.mono_depth_loss_mult > 1e-8:
-                            scale, shift = normalized_depth_scale_and_shift(
-                                outputs["depth"][None, ...], depth_gt[None, ...], depth_gt[None, ...] > 0.0
+
+                    batch_obj_dyn[..., :3] = pose2
+                    batch_obj_dyn[..., 3] = rotation2
+                    camera_ray_bundle.metadata["object_rays_info"] = batch_obj_dyn.reshape(
+                        batch_obj_dyn.shape[0] * batch_obj_dyn.shape[1], batch_obj_dyn.shape[2] * batch_obj_dyn.shape[3]
+                    )
+                    # meta_sh = camera_ray_bundle.metadata["object_rays_metadata"].shape
+                    # camera_ray_bundle.metadata["object_rays_metadata"] = camera_ray_bundle.metadata[
+                    #     "object_rays_metadata"
+                    # ].reshape(meta_sh[0] * meta_sh[1], meta_sh[2])
+
+                    with torch.no_grad():
+                        outputs = pipeline.model.get_outputs_for_camera_ray_bundle_render(camera_ray_bundle)
+                        print(outputs.keys())
+                    render_image = []
+                    for rendered_output_name in rendered_output_names:
+                        if rendered_output_name not in outputs:
+                            CONSOLE.rule("Error", style="red")
+                            CONSOLE.print(f"Could not find {rendered_output_name} in the model outputs", justify="center")
+                            CONSOLE.print(
+                                f"Please set --rendered_output_name to one of: {outputs.keys()}", justify="center"
                             )
-                            depth = depth * scale + shift
+                            sys.exit(1)
+                        if rendered_output_name == "depth":
+                            depth = outputs["depth"]
 
-                        depth[depth > max_depth] = max_depth
-                        outputs["depth"] = colormaps.apply_depth_colormap(depth)
-                    if rendered_output_name == "semantics":
-                        semantic_labels = torch.argmax(
-                            torch.nn.functional.softmax(outputs["semantics"], dim=-1), dim=-1
-                        )
-                        colormap = (
-                            pipeline.model.object_meta["semantics"]
-                            .colors.clone()
-                            .detach()
-                            .to(outputs["semantics"].device)
-                        )
-                        semantic_colormap = colormap[semantic_labels]
-                        outputs["semantics"] = semantic_colormap / 255.0
-                    output_image = outputs[rendered_output_name].cpu().numpy()
-                    if output_image.shape[-1] == 1:
-                        output_image = np.concatenate((output_image,) * 3, axis=-1)
-                    render_image.append(output_image)
-                render_image = np.concatenate(render_image, axis=1)
-                if output_format == "images":
-                    media.write_image(output_image_dir / f"{camera_idx:05d}.png", render_image)
-                if output_format == "video" and writer is not None:
-                    writer.add_image(render_image)
+                            filepath = pipeline.datamanager.train_dataparser_outputs.metadata["depth_filenames"][camera_idx]
+                            scale_factor = pipeline.datamanager.train_dataparser_outputs.dataparser_scale * 0.01
+                            depth_img_gt = get_depth_image_from_path(
+                                filepath=filepath, height=render_height, width=render_width, scale_factor=scale_factor
+                            )
+                            depth_mask = torch.abs(depth_img_gt / scale_factor - 65535) > 1e-6
+                            depth_gt = depth_img_gt.to(depth)
+                            depth_gt = depth_gt * outputs["directions_norm"]
+                            depth[~depth_mask] = 0.0
+                            max_depth = depth_img_gt.max()
+                            if pipeline.config.model.mono_depth_loss_mult > 1e-8:
+                                scale, shift = normalized_depth_scale_and_shift(
+                                    outputs["depth"][None, ...], depth_gt[None, ...], depth_gt[None, ...] > 0.0
+                                )
+                                depth = depth * scale + shift
+
+                            depth[depth > max_depth] = max_depth
+                            outputs["depth"] = colormaps.apply_depth_colormap(depth)
+                        if rendered_output_name == "semantics":
+                            semantic_labels = torch.argmax(
+                                torch.nn.functional.softmax(outputs["semantics"], dim=-1), dim=-1
+                            )
+                            colormap = (
+                                pipeline.model.object_meta["semantics"]
+                                .colors.clone()
+                                .detach()
+                                .to(outputs["semantics"].device)
+                            )
+                            semantic_colormap = colormap[semantic_labels]
+                            outputs["semantics"] = semantic_colormap / 255.0
+                        output_image = outputs[rendered_output_name].cpu().numpy()
+                        if output_image.shape[-1] == 1:
+                            output_image = np.concatenate((output_image,) * 3, axis=-1)
+                        render_image.append(output_image)
+                    render_image = np.concatenate(render_image, axis=1)
+                    if output_format == "images":
+                        media.write_image(output_image_dir / f"{frame_generated:05d}.png", render_image)
+                    if output_format == "video" and writer is not None:
+                        writer.add_image(render_image)
 
     if output_format == "video":
         if camera_type == CameraType.EQUIRECTANGULAR:

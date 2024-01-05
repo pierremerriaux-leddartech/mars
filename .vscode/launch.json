@@ -129,7 +129,7 @@
         //"--load-dir",
         //"/home/pierre.merriaux/project/mars-refact/mars/outputs/Mars_pandaset-011-pierre/mars-pandaset-car-depth-recon/2023-11-29_211620/nerfstudio_models/",
         "--vis",
-        "viewer+tensorboard"
+        "viewer+wandb"
       ]
     },
     {
@@ -141,7 +141,9 @@
       "args": [
         "--load-config",
         //"/home/pierre.merriaux/project/mars-refact/mars/outputs/Mars_pandaset-011-pierre/mars-pandaset-car-depth-recon/2023-12-04_211630/config.yml", //scale 0.01
-        "/home/pierre.merriaux/project/mars-refact/mars/outputs/Mars_pandaset-011-pierre/mars-pandaset-car-depth-recon/2023-11-30_195743/config.yml", //scale 0.03
+        //"/home/pierre.merriaux/project/mars-refact/mars/outputs/Mars_pandaset-011-pierre/mars-pandaset-car-depth-recon/2023-11-30_195743/config.yml", //scale 0.03
+        //"/home/pierre.merriaux/project/mars-refact/mars/outputs/Mars_pandaset-011-pierre/mars-pandaset-car-depth-recon/2023-12-06_211416/config.yml", //scale 0.01
+        "/home/pierre.merriaux/project/mars-refact/mars/outputs/Mars_pandaset-011-pierre-50frames-warmup2.5k/mars-pandaset-car-depth-recon/2023-12-08_125541/config.yml",
         "--output-format",
         "images",
       ]

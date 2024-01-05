@@ -722,7 +722,7 @@ class MarsPandasetDataParserConfig(DataParserConfig):
     """specify wich properties are used"""
     obj_opaque: bool = True
     """Ray does stop after intersecting with the first object bbox if true"""
-    box_scale: float = 1.5
+    box_scale: float = 1.1 # test Pierre
     """Maximum scale for bboxes to include shadows"""
     novel_view: str = "left"
     use_obj: bool = True # TODO for pierre test
